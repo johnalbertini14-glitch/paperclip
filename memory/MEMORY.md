@@ -18,6 +18,10 @@
 1. **REVA-335** — Install Adversarial Feedback Loops (todo, waiting for code)
 2. **REVA-356** — HMAC Signature Verification (in_progress, blocked by REVA-358)
 
+## Implementation Plans (Ready to Execute)
+- [REVA-356 Plan](REVA-356-implementation-plan.md) — HMAC verification, ready to implement
+- [REVA-335 Plan](REVA-335-implementation-plan.md) — Adversarial feedback integration, ready to implement
+
 ## Next Actions on Code Restoration
 1. Pull latest from RevCortex
 2. Verify STOP command is lifted (check REVA-326, REVA-333, REVA-334 status)
