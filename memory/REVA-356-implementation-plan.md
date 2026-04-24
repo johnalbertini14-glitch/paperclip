@@ -19,29 +19,113 @@
    - File: `backend/routes/adversarial_feedback.py` (likely)
    - Endpoint: `/api/adversarial-feedback/paperclip/webhook`
 
-2. **Add HMAC verification middleware/guard**:
+2. **Add HMAC verification function**:
    ```python
    import hmac
    import hashlib
-   from fastapi import HTTPException, Header
+   import os
+   from fastapi import HTTPException, status
    
-   # Get secret from environment
-   secret = os.getenv("PAPERCLIP_WEBHOOK_SECRET")
-   
-   # Verify signature header
-   # Expected format: X-Paperclip-Signature: sha256=<hex>
+   def verify_paperclip_signature(
+       body: bytes,
+       signature_header: str | None
+   ) -> bool:
+       """Verify Paperclip webhook HMAC-SHA256 signature."""
+       secret = os.getenv("PAPERCLIP_WEBHOOK_SECRET")
+       if not secret:
+           raise HTTPException(
+               status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+               detail="Webhook secret not configured"
+           )
+       
+       if not signature_header:
+           return False
+       
+       # Parse header: "sha256=<hex>"
+       if not signature_header.startswith("sha256="):
+           return False
+       
+       expected_sig = signature_header[7:]  # Remove "sha256=" prefix
+       computed_sig = hmac.new(
+           secret.encode(),
+           body,
+           hashlib.sha256
+       ).hexdigest()
+       
+       # Use constant-time comparison to prevent timing attacks
+       return hmac.compare_digest(computed_sig, expected_sig)
    ```
 
-3. **Modify endpoint**:
-   - Add signature verification before processing webhook
-   - Reject with 403 if signature missing or invalid
-   - Allow processing if signature valid
+3. **Modify endpoint** (in `backend/routes/adversarial_feedback.py`):
+   ```python
+   from fastapi import Request
+   
+   @router.post("/api/adversarial-feedback/paperclip/webhook")
+   async def paperclip_webhook(request: Request):
+       # Read raw body for signature verification
+       body = await request.body()
+       
+       # Get signature header
+       signature = request.headers.get("X-Paperclip-Signature")
+       
+       # Verify signature (403 if missing or invalid)
+       if not verify_paperclip_signature(body, signature):
+           raise HTTPException(
+               status_code=403,
+               detail="Invalid or missing webhook signature"
+           )
+       
+       # Parse JSON and process webhook
+       data = json.loads(body)
+       # ... rest of webhook handling logic ...
+   ```
+   - Signature verification happens BEFORE JWT validation
+   - Returns 403 regardless of JWT validity if signature fails
+   - No logging of signature or secret values
 
-4. **Write tests**:
-   - Test rejection without signature
-   - Test rejection with invalid signature
-   - Test acceptance with valid signature
-   - Update test file: `backend/tests/test_adversarial_feedback_api.py` (likely)
+4. **Write tests** (in `backend/tests/test_adversarial_feedback_api.py`):
+   ```python
+   import hmac
+   import hashlib
+   import json
+   
+   def test_webhook_rejects_missing_signature():
+       """Test 403 when X-Paperclip-Signature header is missing."""
+       response = client.post(
+           "/api/adversarial-feedback/paperclip/webhook",
+           json={"test": "data"},
+           headers={}  # No signature header
+       )
+       assert response.status_code == 403
+   
+   def test_webhook_rejects_invalid_signature():
+       """Test 403 when signature is invalid."""
+       response = client.post(
+           "/api/adversarial-feedback/paperclip/webhook",
+           json={"test": "data"},
+           headers={"X-Paperclip-Signature": "sha256=invalid"}
+       )
+       assert response.status_code == 403
+   
+   def test_webhook_accepts_valid_signature():
+       """Test success with valid HMAC signature."""
+       secret = "test_secret"
+       body = json.dumps({"test": "data"}).encode()
+       sig = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+       
+       response = client.post(
+           "/api/adversarial-feedback/paperclip/webhook",
+           data=body,
+           headers={
+               "X-Paperclip-Signature": f"sha256={sig}",
+               "Content-Type": "application/json"
+           }
+       )
+       assert response.status_code == 200  # Or whatever success code
+   ```
+   - Ensure tests set PAPERCLIP_WEBHOOK_SECRET env var
+   - Test both rejection and acceptance cases
+   - Use monkeypatch or fixture to set secret for tests
 
 5. **Verify**:
    - Run full test suite
