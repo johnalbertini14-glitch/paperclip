@@ -8,15 +8,13 @@ import tempfile
 import time
 from pathlib import Path
 from typing import AsyncGenerator, Generator
-
-# Fixtures will be imported from adapter and utils
-# These will be available to all tests
-
+import pytest_asyncio
 
 @pytest.fixture(scope="session")
 def event_loop():
     """Create event loop for async tests."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     yield loop
     loop.close()
 
@@ -110,19 +108,21 @@ If deployment fails:
         yield vault_path
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def adapter(test_vault_path):
     """Create PageIndexAdapter instance with test vault."""
     from src.adapter import PageIndexAdapter
 
-    adapter_instance = PageIndexAdapter(
-        vault_path=str(test_vault_path),
-        hierarchy_depth_limit=10
-    )
+    config = {
+        "vault_path": str(test_vault_path),
+        "hierarchy_depth_limit": 10
+    }
+    adapter_instance = PageIndexAdapter(config)
+    await adapter_instance.initialize()
     yield adapter_instance
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def mcp_server(adapter):
     """Create PageIndexMCPServer instance."""
     from src.mcp_server import PageIndexMCPServer
