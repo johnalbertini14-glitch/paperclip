@@ -1,0 +1,23 @@
+---
+type: project
+status: active
+start_date: 2026-04-20
+tags:
+  - revcortex
+  - memory-system
+  - migration
+dependencies:
+  - reva-185-staging-deploy
+team:
+  - e5efa3c2-9c67-4617-8612-998ea68edfed
+files:
+  - scripts/migrate_7_to_4_layer.py
+  - REVA-165_DATABASE_ACCESS_REQUEST.md
+milestones:
+  - date: 2026-04-21
+    event: local-validation-complete
+    notes: All 15 documents migrated locally, schema changes applied
+next_steps:
+  - wait for REVA-185 staging MongoDB
+  - execute migration on staging
+  - validate staging migration

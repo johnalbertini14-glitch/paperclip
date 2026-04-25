@@ -1,0 +1,44 @@
+# Signatiq Project Items
+
+items:
+  - type: project_file
+    path: "/Volumes/Seagate Portable Drive/Project Repos/EngageAI/RevCortex"
+    description: "Primary working directory"
+    relevance: critical
+    
+  - type: documentation
+    path: "/Volumes/Seagate Portable Drive/Project Repos/EngageAI/RevCortex/CLAUDE.md"
+    description: "Development rules and conventions"
+    relevance: high
+    
+  - type: documentation
+    path: "/Volumes/Seagate Portable Drive/Project Repos/EngageAI/RevCortex/.planning/ROADMAP.md"
+    description: "Project roadmap with phases and status"
+    relevance: high
+    
+  - type: documentation
+    path: "/Volumes/Seagate Portable Drive/Project Repos/EngageAI/RevCortex/TODOS.md"
+    description: "TODO items for monolith decomposition"
+    relevance: medium
+    
+  - type: work_item
+    identifier: "Phase 1"
+    description: "Code Recovery - merging main services with security-phase2 additions"
+    status: "in_progress"
+    relevance: high
+    
+  - type: completed_work
+    identifiers: ["REVA-127", "REVA-128", "REVA-129"]
+    description: "Security audit tasks completed (CSP/HSTS headers, token vault fixes, security hardening)"
+    date: "2026-04-15"
+    relevance: high
+    
+  - type: test_command
+    command: "cd backend && ../.venv311/bin/python -m pytest tests/ -q --tb=short"
+    description: "Backend test command"
+    relevance: high
+    
+  - type: test_command
+    command: "npm run check"
+    description: "Frontend TypeScript check"
+    relevance: high
