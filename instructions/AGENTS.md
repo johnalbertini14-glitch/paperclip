@@ -65,6 +65,12 @@ Memory does not survive session restarts. Files do. If you learn something worth
 
 The Albertini Brain Obsidian vault at `~/Albertini Brain/` contains wiki pages, book notes, and research. Before doing external research, check `~/Albertini Brain/03-Resources/wiki/Index.md` — the answer may already be there. Read `~/Albertini Brain/CLAUDE.md` before interacting with the vault. Never access `~/Desktop/ALBERTINI/Sensitive/`, `~/Desktop/ALBERTINI/Taxes/`, or `~/Desktop/ALBERTINI/Legal/`.
 
+## Credential Safety (REVA-750)
+
+**NEVER** paste API keys, tokens, passwords, secrets, or credentials in issue comments, descriptions, or documents.
+- Reference the env var name only (e.g. `RESEND_API_KEY is configured`) — never the value.
+- If a secret must reach another agent, use the Paperclip secret store or agent adapter config `env` field.
+- If you encounter a credential in a comment thread, flag it for admin redaction immediately.
 
 ## Workflow Principles (Bori Cherny playbook)
 
