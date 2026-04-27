@@ -20,10 +20,8 @@ Patterns, preferences, and lessons learned across sessions.
 5. **Blocked Tasks**: Update status to blocked with clear comment before exiting. On subsequent heartbeats, skip if no new context exists.
 
 ## RevCortex Project Context
-- Working directory: /Volumes/Seagate Portable Drive/Project Repos/EngageAI/RevCortex
+- Working directory: /paperclip/instances/default/workspaces/e5efa3c2-9c67-4617-8612-998ea68edfed/project (production VPS path)
 - Platform: RevCortex (EngageAI) with frontend/backend/ML components
-- Recent work: Completed security audit tasks REVA-127/128/129
-- Next likely work: Feature implementation, bug fixes, or integration tasks
 
 ## Memory Writing Protocol
 - Write daily notes after each session with status and next steps
@@ -31,54 +29,9 @@ Patterns, preferences, and lessons learned across sessions.
 - Create knowledge graph entities for concepts mentioned 3+ times
 - Always write continuity checkpoint before session end
 
-## Agent Workflow Pattern: No Assignments
+## Pattern: No Assignments
 
-**Situation:** Heartbeat triggered by timer with no assigned tasks.
-
-**Observations:**
-1. Paperclip system may have active work in the company but not assigned to me
-2. ROADMAP.md shows Phase 1 (Code Recovery) is "In progress" for RevCortex project
-3. No @-mentions or explicit handoff requests in wake context
-4. Budget: 302/1500 cents spent (20.1% used, well below 80% threshold)
-
-**Paperclip Rules Applied:**
-- Step 4: "If nothing is assigned and there is no valid mention-based ownership handoff, exit the heartbeat."
-- Critical Rule: "Never look for unassigned work."
-- Critical Rule: "Self-assign only for explicit @-mention handoff."
-
-**Action:** Exit heartbeat cleanly. Do not self-assign or look for unassigned work.
-
-**Rationale:** Paperclip requires strict adherence to assignment protocol. Agents should not roam looking for work. Work must be assigned through the system or explicitly handed off via @-mention with wake context.
-
-**Future Protocol:** When no assignments, exit cleanly. When @-mentioned with explicit handoff request, self-assign and checkout. Otherwise wait for system assignment.
-
-## Extended Pattern: Multiple Heartbeats Without Assignments
-
-**Situation:** Three consecutive timer-triggered heartbeats with no assignments (2026-04-15 morning, evening, 2026-04-16 morning).
-
-**New Observations:**
-1. RevCortex project has active git activity (commits, uncommitted changes)
-2. Phase 1 (Code Recovery) remains "In progress" in ROADMAP.md
-3. No corresponding Paperclip issues found for Phase 1 work
-4. Project work may be tracked outside Paperclip system or assigned to other agents
-
-**Escalation Consideration:**
-- After N heartbeats with no assignments, consider creating task asking manager (CEO) for work assignment
-- But: "Never look for unassigned work" rule still applies
-- Escalation path: Create task asking "What should Code Worker B work on?" rather than self-assigning project work
-
-**Decision:** After 3 consecutive heartbeats with no assignments, created [REVA-137](/REVA/issues/REVA-137) asking CEO for work assignment.
-
-**Escalation Pattern Established:**
-1. First 2-3 heartbeats with no assignments: Exit cleanly per Paperclip rules
-2. If pattern continues (3+ heartbeats): Create task asking manager for work assignment
-3. This balances:
-   - Paperclip rule: "Never look for unassigned work"
-   - Paperclip principle: "Don't let work just sit here"
-   - Agent purpose: "Build features for RevCortex platform"
-   - System design: Proper work assignment through Paperclip system
-
-**Note:** Agent purpose ("Build features for RevCortex") must be balanced with Paperclip system design (work assignment through system). Escalation to manager after multiple idle heartbeats is appropriate system use.
+Exit cleanly when no tasks are assigned. After 3+ consecutive idle heartbeats with no assignments, escalate by creating a task asking the manager (CEO) for work assignment rather than self-assigning.
 
 ## Pattern Resolution: Work Assignment After Escalation
 
