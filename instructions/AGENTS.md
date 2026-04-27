@@ -79,3 +79,12 @@ Apply to every non-trivial change. These layer on top of the Paperclip heartbeat
 - **Simplicity, root causes, minimal impact.** Make every change as simple as possible. Find root causes — no band-aids. Only touch what is necessary.
 
 Full text: see `WORKFLOW_PRINCIPLES.md` at the company root.
+
+## Tool Ban (REVA-746)
+
+**NEVER** use Bash to run `head`, `cat`, `grep`, or `find`. Use the dedicated tools:
+- `head` or `cat` → **Read** tool (use `offset` + `limit` for partial reads)
+- `grep` → **Grep** tool
+- `find` → **Glob** tool
+
+These four Bash commands account for 22% of all wasted tool calls per the codeburn audit. This ban is enforced by a PreToolUse hook.
