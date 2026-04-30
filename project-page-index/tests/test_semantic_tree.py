@@ -155,6 +155,59 @@ class TestSemanticTreeTraversal(unittest.TestCase):
         self.assertEqual(len(subtree["children"]), 2)
         self.assertEqual(len(subtree["children"][0]["children"]), 0)
 
+    def test_get_ancestors(self):
+        """Test getting ancestor nodes for a target node."""
+        target_node = {"title": "Subsection 1.1"}
+        ancestors = SemanticTreeTraversal.get_ancestors(self.tree, target_node)
+
+        # Should include root and Section 1
+        ancestor_titles = [node["title"] for node in ancestors]
+        self.assertIn("root", ancestor_titles)
+        self.assertIn("Section 1", ancestor_titles)
+        self.assertGreaterEqual(len(ancestors), 2)
+
+    def test_get_ancestors_root_node(self):
+        """Test getting ancestors for root node."""
+        target_node = {"title": "root"}
+        ancestors = SemanticTreeTraversal.get_ancestors(self.tree, target_node)
+
+        # Root has no ancestors
+        self.assertEqual(len(ancestors), 0)
+
+    def test_get_ancestors_not_found(self):
+        """Test getting ancestors for non-existent node."""
+        target_node = {"title": "Nonexistent"}
+        ancestors = SemanticTreeTraversal.get_ancestors(self.tree, target_node)
+
+        # Non-existent node has no ancestors
+        self.assertEqual(len(ancestors), 0)
+
+    def test_get_siblings(self):
+        """Test getting sibling nodes."""
+        target_node = {"title": "Section 1"}
+        siblings = SemanticTreeTraversal.get_siblings(self.tree, target_node)
+
+        # Section 1's sibling is Section 2
+        sibling_titles = [node["title"] for node in siblings]
+        self.assertIn("Section 2", sibling_titles)
+        self.assertEqual(len(siblings), 1)
+
+    def test_get_siblings_single_child(self):
+        """Test getting siblings when node is only child."""
+        target_node = {"title": "Subsection 1.1"}
+        siblings = SemanticTreeTraversal.get_siblings(self.tree, target_node)
+
+        # Subsection 1.1 is only child, so no siblings
+        self.assertEqual(len(siblings), 0)
+
+    def test_get_siblings_not_found(self):
+        """Test getting siblings for non-existent node."""
+        target_node = {"title": "Nonexistent"}
+        siblings = SemanticTreeTraversal.get_siblings(self.tree, target_node)
+
+        # Non-existent node has no siblings
+        self.assertEqual(len(siblings), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
