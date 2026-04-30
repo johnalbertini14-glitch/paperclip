@@ -10,7 +10,7 @@ import logging
 from pydantic import ValidationError
 
 from .adapter import PageIndexAdapter, QueryMethod, SearchResult
-from .validators import QueryRequest, PageIndexConfig
+from .validators import QueryRequest
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +53,7 @@ class PageIndexMCPServer:
         namespace: str,
         query: str,
         method: str = "structure_aware",
-        limit: int = 10,
-        workspace_id: Optional[str] = None
+        limit: int = 10
     ) -> List[Dict[str, Any]]:
         """
         Query semantic tree in namespace.
@@ -64,7 +63,6 @@ class PageIndexMCPServer:
             query: Search query string
             method: Query method (structure_aware, semantic_search, hierarchy_traversal)
             limit: Maximum results to return
-            workspace_id: Optional workspace scoping (REVA-249 security)
 
         Returns:
             List of search results with hierarchy context
@@ -77,11 +75,11 @@ class PageIndexMCPServer:
                 limit=limit
             )
         except ValidationError as e:
-            self.logger.warning(f"Query validation failed: {e}")
-            raise ValueError(f"Invalid query parameters: {e}")
+            self.logger.warning("Query validation failed: %s", e)
+            raise ValueError(f"Invalid query parameters: {e}") from e
 
         try:
-            query_method = QueryMethod(validated.method.value)
+            query_method = QueryMethod(validated.method)
         except ValueError:
             query_method = QueryMethod.STRUCTURE_AWARE
 
@@ -117,12 +115,12 @@ class PageIndexMCPServer:
         """
         tree = await self.adapter.get_tree(namespace)
         if not tree:
-            self.logger.warning(f"Namespace not found: {namespace}")
+            self.logger.warning("Namespace not found: %s", namespace)
             return None
 
         node = self._find_node_by_id(tree, node_id)
         if not node:
-            self.logger.warning(f"Node not found: {node_id} in {namespace}")
+            self.logger.warning("Node not found: %s in %s", node_id, namespace)
             return None
 
         result = {

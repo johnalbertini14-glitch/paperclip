@@ -6,7 +6,7 @@ as alternative to vector search for structured documents.
 """
 
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 import logging
 import os
@@ -69,7 +69,7 @@ class PageIndexAdapter:
 
     async def initialize(self) -> None:
         """Initialize adapter and load document vault."""
-        self.logger.info(f"Initializing PageIndex adapter with vault: {self.vault_path}")
+        self.logger.info("Initializing PageIndex adapter with vault: %s", self.vault_path)
         await self._load_vault()
 
     async def _load_vault(self) -> None:
@@ -77,13 +77,13 @@ class PageIndexAdapter:
         vault_path = Path(os.path.expanduser(self.vault_path))
 
         if not vault_path.exists():
-            self.logger.warning(f"Vault path does not exist: {vault_path}")
+            self.logger.warning("Vault path does not exist: %s", vault_path)
             return
 
-        self.logger.info(f"Loading vault from {vault_path}")
+        self.logger.info("Loading vault from %s", vault_path)
 
         markdown_files = list(vault_path.glob("**/*.md"))
-        self.logger.info(f"Found {len(markdown_files)} markdown files in vault")
+        self.logger.info("Found %d markdown files in vault", len(markdown_files))
 
         for md_file in markdown_files:
             try:
@@ -92,15 +92,14 @@ class PageIndexAdapter:
 
                 doc_id = str(md_file.relative_to(vault_path))
                 await self.build_semantic_tree(doc_id, content)
-                self.logger.debug(f"Loaded document: {doc_id}")
-            except Exception as e:
-                self.logger.error(f"Error loading document {md_file}: {e}")
+                self.logger.debug("Loaded document: %s", doc_id)
+            except OSError as e:
+                self.logger.error("Error loading document %s: %s", md_file, e)
 
     async def build_semantic_tree(
         self,
         document_id: str,
-        content: str,
-        metadata: Dict[str, Any] = None
+        content: str
     ) -> SemanticNode:
         """
         Build semantic tree from document content.
@@ -118,7 +117,7 @@ class PageIndexAdapter:
         )
 
         self.semantic_trees[document_id] = root_node
-        self.logger.debug(f"Built semantic tree for {document_id} with {tree_data['headings_count']} headings")
+        self.logger.debug("Built semantic tree for %s with %d headings", document_id, tree_data['headings_count'])
 
         return root_node
 
@@ -163,19 +162,23 @@ class PageIndexAdapter:
         self,
         namespace: str,
         query: str,
-        method: QueryMethod = QueryMethod.STRUCTURE_AWARE,
+        _method: QueryMethod = QueryMethod.STRUCTURE_AWARE,
         limit: int = 10
     ) -> List[SearchResult]:
         """
         Query semantic tree index.
 
         Returns relevant document sections based on query and hierarchy.
+
+        Note: method parameter is reserved for future query strategy implementations.
+        Currently only STRUCTURE_AWARE is implemented.
         """
         tree = self.semantic_trees.get(namespace)
         if not tree:
-            self.logger.warning(f"No semantic tree found for namespace: {namespace}")
+            self.logger.warning("No semantic tree found for namespace: %s", namespace)
             return []
 
+        # Structure-aware query: traverse hierarchy and match on titles
         query_lower = query.lower()
         results = []
 

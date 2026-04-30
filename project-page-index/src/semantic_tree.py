@@ -4,9 +4,9 @@ Semantic Tree construction and traversal utilities.
 Transforms documents into hierarchical structures preserving semantic relationships.
 """
 
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import logging
 
 logger = logging.getLogger(__name__)
@@ -91,7 +91,6 @@ class SemanticTreeBuilder:
 
         stack = []
         root_node = {"title": "root", "level": 0, "children": []}
-        current_parent = root_node
 
         for heading in headings:
             node = {
@@ -186,15 +185,38 @@ class SemanticTreeTraversal:
     @staticmethod
     def get_ancestors(tree: Dict, target_node: Dict) -> List[Dict]:
         """Get all ancestor nodes for a target node."""
-        # TODO: Implement ancestor retrieval
-        # This requires tracking parent references during traversal
-        raise NotImplementedError("Ancestor retrieval not yet implemented")
+        ancestors = []
+
+        def find_path(node, target, path):
+            if node.get("title") == target.get("title"):
+                ancestors.extend(path)
+                return True
+            for child in node.get("children", []):
+                if find_path(child, target, path + [node]):
+                    return True
+            return False
+
+        find_path(tree, target_node, [])
+        return ancestors
 
     @staticmethod
     def get_siblings(tree: Dict, target_node: Dict) -> List[Dict]:
         """Get sibling nodes at same level."""
-        # TODO: Implement sibling retrieval
-        raise NotImplementedError("Sibling retrieval not yet implemented")
+        siblings = []
+
+        def find_siblings(node):
+            children = node.get("children", [])
+            for child in children:
+                if child.get("title") == target_node.get("title"):
+                    siblings.extend([c for c in children if c.get("title") != target_node.get("title")])
+                    return True
+            for child in children:
+                if find_siblings(child):
+                    return True
+            return False
+
+        find_siblings(tree)
+        return siblings
 
     @staticmethod
     def get_subtree(node: Dict, max_depth: int = 3, current_depth: int = 0) -> Dict:
