@@ -4,7 +4,7 @@ Input validation models for PageIndex adapter (REVA-249 security fixes).
 Provides Pydantic models for config, query parameters, and document metadata.
 """
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, Dict, Any, List
 from enum import Enum
 
@@ -18,6 +18,8 @@ class QueryMethod(str, Enum):
 
 class PageIndexConfig(BaseModel):
     """PageIndex adapter configuration with validation."""
+
+    model_config = ConfigDict(use_enum_values=True)
 
     vault_path: str = Field(
         default="~/Albertini Brain/",
@@ -45,9 +47,6 @@ class PageIndexConfig(BaseModel):
         description="Maximum document size to process"
     )
 
-    class Config:
-        use_enum_values = True
-
 
 class QueryRequest(BaseModel):
     """Query request validation (REVA-249: input validation)."""
@@ -73,7 +72,8 @@ class QueryRequest(BaseModel):
         description="Maximum results to return"
     )
 
-    @validator("query")
+    @field_validator("query")
+    @classmethod
     def validate_query_no_injection(cls, v):
         """Validate query doesn't contain suspicious patterns (REVA-249)."""
         # Prevent ReDoS-like patterns: consecutive wildcards/special chars
@@ -87,6 +87,8 @@ class QueryRequest(BaseModel):
 
 class DocumentMetadata(BaseModel):
     """Document metadata validation."""
+
+    model_config = ConfigDict(use_enum_values=True)
 
     document_id: str = Field(
         min_length=1,
@@ -110,6 +112,3 @@ class DocumentMetadata(BaseModel):
         default=None,
         description="Document creation timestamp"
     )
-
-    class Config:
-        use_enum_values = True
