@@ -93,7 +93,7 @@ class PageIndexAdapter:
                 doc_id = str(md_file.relative_to(vault_path))
                 await self.build_semantic_tree(doc_id, content)
                 self.logger.debug("Loaded document: %s", doc_id)
-            except OSError as e:
+            except (OSError, UnicodeDecodeError) as e:
                 self.logger.error("Error loading document %s: %s", md_file, e)
 
     async def build_semantic_tree(
@@ -162,7 +162,7 @@ class PageIndexAdapter:
         self,
         namespace: str,
         query: str,
-        _method: QueryMethod = QueryMethod.STRUCTURE_AWARE,
+        method: QueryMethod = QueryMethod.STRUCTURE_AWARE,  # pylint: disable=unused-argument
         limit: int = 10
     ) -> List[SearchResult]:
         """
@@ -170,8 +170,14 @@ class PageIndexAdapter:
 
         Returns relevant document sections based on query and hierarchy.
 
-        Note: method parameter is reserved for future query strategy implementations.
-        Currently only STRUCTURE_AWARE is implemented.
+        Args:
+            namespace: Document namespace to query
+            query: Search query string
+            method: Query method (reserved for future implementations, currently only STRUCTURE_AWARE)
+            limit: Maximum results to return
+
+        Returns:
+            List of SearchResult objects matching the query
         """
         tree = self.semantic_trees.get(namespace)
         if not tree:
