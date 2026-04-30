@@ -57,7 +57,7 @@ class PaperclipPageIndexIntegration:
 
     async def initialize(self):
         """Initialize adapter and MCP server."""
-        self.adapter = PageIndexAdapter(self.pageindex_config.dict())
+        self.adapter = PageIndexAdapter(self.pageindex_config.model_dump())
         self.mcp_server = PageIndexMCPServer(self.adapter)
         await self.mcp_server.initialize()
 
@@ -98,8 +98,7 @@ async def on_document_ingested(
         # Build semantic tree for document
         await pageindex.adapter.build_semantic_tree(
             document_id=doc_id,
-            content=content,
-            metadata=metadata
+            content=content
         )
         print(f"✅ Indexed document: {doc_id}")
         return True
