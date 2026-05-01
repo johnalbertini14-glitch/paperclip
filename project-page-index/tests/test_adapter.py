@@ -1,4 +1,5 @@
 """Tests for PageIndex adapter."""
+# pylint: disable=redefined-outer-name,protected-access
 
 import unittest
 import pytest
@@ -351,5 +352,4 @@ class TestAdapterGetHierarchyContext(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    import pytest
     pytest.main([__file__, "-v"])

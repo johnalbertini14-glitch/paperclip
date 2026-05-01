@@ -1,8 +1,8 @@
 """Tests for PageIndex MCP Server."""
+# pylint: disable=redefined-outer-name,protected-access,line-too-long
 
+from unittest.mock import AsyncMock, MagicMock
 import pytest
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
 from src.mcp_server import PageIndexMCPServer
 from src.adapter import PageIndexAdapter, SemanticNode, SearchResult
 
