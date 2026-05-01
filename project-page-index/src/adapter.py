@@ -111,7 +111,10 @@ class PageIndexAdapter:
         )
 
         self.semantic_trees[document_id] = root_node
-        self.logger.debug("Built semantic tree for %s with %d headings", document_id, tree_data['headings_count'])
+        self.logger.debug(
+            "Built semantic tree for %s with %d headings",
+            document_id, tree_data['headings_count']
+        )
 
         return root_node
 
@@ -167,7 +170,8 @@ class PageIndexAdapter:
         Args:
             namespace: Document namespace to query
             query: Search query string
-            method: Query method (reserved for future implementations, currently only STRUCTURE_AWARE)
+            method: Query method (reserved for future implementations,
+                currently only STRUCTURE_AWARE)
             limit: Maximum results to return
 
         Returns:
