@@ -4,9 +4,10 @@ Input validation models for PageIndex adapter (REVA-249 security fixes).
 Provides Pydantic models for config, query parameters, and document metadata.
 """
 
-from pydantic import BaseModel, Field, field_validator, ConfigDict
-from typing import Optional
 from enum import Enum
+from typing import Optional
+
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 
 class QueryMethod(str, Enum):

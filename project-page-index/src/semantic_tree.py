@@ -63,11 +63,11 @@ class SemanticTreeBuilder:
             current_pos += len(line) + 1  # +1 for newline
 
         # Calculate content ranges
-        for i in range(len(headings)):
+        for i, heading in enumerate(headings):
             if i + 1 < len(headings):
-                headings[i].content_end = headings[i + 1].content_start
+                heading.content_end = headings[i + 1].content_start
             else:
-                headings[i].content_end = len(content)
+                heading.content_end = len(content)
 
         return headings
 
@@ -208,7 +208,8 @@ class SemanticTreeTraversal:
             children = node.get("children", [])
             for child in children:
                 if child.get("title") == target_node.get("title"):
-                    siblings.extend([c for c in children if c.get("title") != target_node.get("title")])
+                    target_title = target_node.get("title")
+                    siblings.extend([c for c in children if c.get("title") != target_title])
                     return True
             for child in children:
                 if find_siblings(child):
