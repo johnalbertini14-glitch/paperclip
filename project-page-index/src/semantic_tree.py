@@ -4,7 +4,7 @@ Semantic Tree construction and traversal utilities.
 Transforms documents into hierarchical structures preserving semantic relationships.
 """
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import re
 from dataclasses import dataclass
 import logging
@@ -80,7 +80,7 @@ class SemanticTreeBuilder:
         """Extract content between positions."""
         return content[start:end].strip()
 
-    def build_hierarchy(self, headings: List[HeadingMatch]) -> Dict[str, any]:
+    def build_hierarchy(self, headings: List[HeadingMatch]) -> Dict[str, Any]:
         """
         Build hierarchical structure from flat list of headings.
 
@@ -114,7 +114,7 @@ class SemanticTreeBuilder:
 
         return root_node
 
-    def build_tree(self, document_id: str, content: str) -> Dict[str, any]:
+    def build_tree(self, document_id: str, content: str) -> Dict[str, Any]:
         """
         Build complete semantic tree from document.
 

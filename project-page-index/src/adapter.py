@@ -6,7 +6,7 @@ as alternative to vector search for structured documents.
 """
 
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 import logging
 import os
@@ -32,14 +32,8 @@ class SemanticNode:
     content: str
     path: List[str]
     level: int
-    children: List["SemanticNode"] = None
-    metadata: Dict[str, Any] = None
-
-    def __post_init__(self):
-        if self.children is None:
-            self.children = []
-        if self.metadata is None:
-            self.metadata = {}
+    children: List["SemanticNode"] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

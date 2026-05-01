@@ -145,7 +145,7 @@ class PageIndexMCPServer:
 
         return None
 
-    async def _get_node_ancestry(self, root, node_id: str, path: List = None) -> List[Dict[str, Any]]:
+    async def _get_node_ancestry(self, root, node_id: str, path: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
         """Get ancestry chain for a node."""
         if path is None:
             path = []
