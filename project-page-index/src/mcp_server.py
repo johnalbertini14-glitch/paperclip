@@ -146,10 +146,7 @@ class PageIndexMCPServer:
         return None
 
     async def _get_node_ancestry(
-        self,
-        root,
-        node_id: str,
-        path: Optional[List[Dict[str, Any]]] = None
+        self, root, node_id: str, path: Optional[List[Dict[str, Any]]] = None
     ) -> List[Dict[str, Any]]:
         """Get ancestry chain for a node."""
         if path is None:
@@ -160,8 +157,7 @@ class PageIndexMCPServer:
 
         for child in root.children:
             serialized = await self._serialize_tree(root)
-            new_path = path + [serialized]
-            found = await self._get_node_ancestry(child, node_id, new_path)
+            found = await self._get_node_ancestry(child, node_id, path + [serialized])
             if found:
                 return found
 

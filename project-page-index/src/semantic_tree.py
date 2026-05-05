@@ -208,8 +208,10 @@ class SemanticTreeTraversal:
             children = node.get("children", [])
             for child in children:
                 if child.get("title") == target_node.get("title"):
-                    target_title = target_node.get("title")
-                    siblings.extend([c for c in children if c.get("title") != target_title])
+                    siblings.extend([
+                        c for c in children
+                        if c.get("title") != target_node.get("title")
+                    ])
                     return True
             for child in children:
                 if find_siblings(child):
