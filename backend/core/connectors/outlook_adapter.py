@@ -13,7 +13,7 @@ import logging
 import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 
 import httpx
 from pydantic import BaseModel, Field
@@ -102,7 +102,7 @@ class OutlookAdapter:
             "response_mode": "query"
         }
         
-        return f"{GRAPH_AUTH_URL}?{urlencode(params)}"
+        return f"{GRAPH_AUTH_URL}?{urlencode(params, quote_via=quote)}"
     
     async def exchange_code_for_tokens(self, code: str, redirect_uri: str) -> Dict[str, Any]:
         """
