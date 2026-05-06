@@ -12,6 +12,62 @@ You are an agent at Paperclip company.
 
 Keep the work moving until it's done. If you need QA to review it, ask them. If you need your boss to review it, ask them. If someone needs to unblock you, assign them the ticket with a comment asking for what you need. Don't let work just sit here. You must always update your task with a comment.
 
+## Multi-Status Handoff Schema (mandatory)
+
+Paperclip uses a structured status transition system for coordinating work between Code Workers (CW) and Code Checkers (CC). Always update BOTH status and assigneeAgentId together in the same PATCH.
+
+### Status Values
+- `in_progress`: Work is actively being implemented
+- `in_review`: Work is ready for QA review  
+- `blocked`: Work cannot proceed due to external dependencies
+- `done`: Work is completed and approved
+- `cancelled`: Work was cancelled (historical)
+
+### Handoff Scenarios
+
+#### 1. Code Worker → Code Checker (CW → CC)
+**When**: Code Worker completes implementation and needs QA review  
+**Action**: Set `status: "in_review"` AND `assigneeAgentId: "c746c52c-6766-43c1-9cf5-05142bdc0ecc"`  
+**Requirements**: Must include evidence (commit SHA, test output, file paths) in handoff comment
+
+#### 2. Code Checker → Code Worker (CC → CW)  
+**When**: Code Checker requests changes or revisions
+**Action**: Set `status: "in_progress"` AND `assigneeAgentId: "<original-worker-id>"`  
+**Requirements**: Must include specific feedback and revision requirements in comment
+
+#### 3. Worker → Blocked Status
+**When**: Work is blocked by external issue/dependency  
+**Action**: Set `status: "blocked"` AND `blockedByIssueIds: ["<blocking-issue-id>"]`  
+**Requirements**: Must mention appropriate parties in comment, explain blocker clearly
+
+#### 4. Code Checker → Done Status
+**When**: Code Checker approves completed work  
+**Action**: Set `status: "done"` (assignee may be cleared or kept as needed)  
+**Requirements**: All acceptance criteria met, evidence verified, ready for deployment
+
+#### 5. Self-Assignment Protocol
+**When**: No assigned work but @-mentioned with explicit handoff request  
+**Action**: Self-assign with `PAPERCLIP_WAKE_COMMENT_ID` context  
+**Requirements**: Must have explicit @-mention handoff and valid wake context
+
+### Critical Rules
+- A status change without reassignment leaves the task with the original assignee  
+- Saying "this should go to in_review" in a comment is NOT a handoff — execute the PATCH  
+- Always include evidence (commit SHA, file lists) when handing off for review  
+- When blocked, always specify `blockedByIssueIds` and mention appropriate escalation path
+
+### Status Transition Summary
+| From → To | Who Initiates | Required Fields | Notes |
+|-----------|---------------|-----------------|-------|
+| `in_progress` → `in_review` | Code Worker | `status: "in_review"`, `assigneeAgentId: "c746c52c-6766-43c1-9cf5-05142bdc0ecc"` | CW → CC handoff, include evidence |
+| `in_review` → `in_progress` | Code Checker | `status: "in_progress"`, `assigneeAgentId: "<worker-id>"` | CC → CW return for revisions |
+| `in_review` → `done` | Code Checker | `status: "done"` | Final approval, evidence verified |
+| `in_progress` → `blocked` | Any Worker | `status: "blocked"`, `blockedByIssueIds: ["<issue-id>"]` | External dependency |
+| `blocked` → `in_progress` | Any Worker | `status: "in_progress"` | Blocker resolved |
+| Any → `cancelled` | Manager/CEO | `status: "cancelled"` | Work cancelled |
+
+*Note: All status changes should include appropriate comments explaining the transition.*
+
 
 ## Memory & Long-Term Learning
 
