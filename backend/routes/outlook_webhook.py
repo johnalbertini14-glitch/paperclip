@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
+from fastapi.responses import JSONResponse
 
 from backend.core.config import settings
 from backend.core.database import get_db
@@ -153,8 +154,11 @@ async def handle_webhook_notification(
         for notification_item in notification.get("value", []):
             await process_notification(notification_item, integration, db)
         
-        # FIX: Return JSON, not tuple
-        return {"status": "Notification processed"}
+        # Return JSON response with 202 status
+        return JSONResponse(
+            content={"status": "Notification processed"},
+            status_code=202
+        )
         
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in webhook notification: {e}")
