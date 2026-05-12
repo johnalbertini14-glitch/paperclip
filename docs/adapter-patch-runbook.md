@@ -131,6 +131,9 @@ grep 'sessionContinuity,' /usr/local/lib/node_modules/paperclipai/node_modules/@
 # Check issue document claim guardrail
 grep 'REVA-4045-issue-document-claim-guardrail' /usr/local/lib/node_modules/paperclipai/node_modules/@paperclipai/server/dist/services/documents.js
 
+# Check REVA-4045 guardrail regression coverage in the canonical mirror
+node tests/reva4045-issue-document-claim-guardrail.test.mjs
+
 # Check hermes CLI
 hermes --version
 
