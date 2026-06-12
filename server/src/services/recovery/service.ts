@@ -72,6 +72,7 @@ const ACTIVE_RUN_OUTPUT_EVIDENCE_TAIL_BYTES = 8 * 1024;
 const STRANDED_ISSUE_RECOVERY_ORIGIN_KIND = RECOVERY_ORIGIN_KINDS.strandedIssueRecovery;
 const STALE_ACTIVE_RUN_EVALUATION_ORIGIN_KIND = RECOVERY_ORIGIN_KINDS.staleActiveRunEvaluation;
 const DEFERRED_WAKE_CONTEXT_KEY = "_paperclipWakeContext";
+const MISSING_DISPOSITION_NOT_RECORDED_REASON = "missing_disposition_not_recorded" as const;
 const SESSIONED_LOCAL_ADAPTERS = new Set([
   "claude_local",
   "codex_local",
@@ -112,18 +113,20 @@ type RecoveryWakeup = (
 
 type LatestIssueRun = Pick<
   typeof heartbeatRuns.$inferSelect,
-  "id" | "agentId" | "status" | "error" | "errorCode" | "contextSnapshot" | "livenessState"
+  "id" | "agentId" | "status" | "error" | "errorCode" | "contextSnapshot" | "livenessState" | "issueCommentStatus"
 > | null;
 type SuccessfulLatestIssueRun = NonNullable<LatestIssueRun> & { status: "succeeded" };
 
 type StrandedRecoveryCause =
   | "stranded_assigned_issue"
   | "workspace_validation_failed"
+  | typeof MISSING_DISPOSITION_NOT_RECORDED_REASON
   | typeof SUCCESSFUL_RUN_MISSING_STATE_REASON;
 
 type SuccessfulRunHandoffRecoveryEvidence = {
   sourceRunId: string | null;
   correctiveRunId: string;
+  correctiveRunIssueCommentStatus: string | null;
   missingDisposition: string;
   handoffAttempt: number;
   maxHandoffAttempts: number;
@@ -244,6 +247,7 @@ function successfulRunHandoffRecoveryEvidence(latestRun: LatestIssueRun): Succes
   return {
     sourceRunId: readNonEmptyString(context.sourceRunId) ?? readNonEmptyString(context.resumeFromRunId),
     correctiveRunId: latestRun.id,
+    correctiveRunIssueCommentStatus: readNonEmptyString(latestRun.issueCommentStatus),
     missingDisposition: readNonEmptyString(context.missingDisposition) ?? "clear_next_step",
     handoffAttempt,
     maxHandoffAttempts,
@@ -490,6 +494,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         errorCode: heartbeatRuns.errorCode,
         contextSnapshot: heartbeatRuns.contextSnapshot,
         livenessState: heartbeatRuns.livenessState,
+        issueCommentStatus: heartbeatRuns.issueCommentStatus,
       })
       .from(heartbeatRuns)
       .where(
@@ -2227,11 +2232,16 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
   }
 
   function strandedRecoveryActionKind(cause: StrandedRecoveryCause) {
-    return cause === SUCCESSFUL_RUN_MISSING_STATE_REASON
+    return isMissingDispositionRecoveryCause(cause)
       ? "missing_disposition" as const
       : cause === "workspace_validation_failed"
         ? "workspace_validation" as const
       : "stranded_assigned_issue" as const;
+  }
+
+  function isMissingDispositionRecoveryCause(cause: StrandedRecoveryCause) {
+    return cause === SUCCESSFUL_RUN_MISSING_STATE_REASON ||
+      cause === MISSING_DISPOSITION_NOT_RECORDED_REASON;
   }
 
   function strandedRecoveryActionFingerprint(input: {
@@ -2254,6 +2264,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     successfulRunHandoffEvidence?: SuccessfulRunHandoffRecoveryEvidence | null;
   }) {
     const context = parseObject(input.latestRun?.contextSnapshot);
+    const missingDispositionNotRecorded = input.recoveryCause === MISSING_DISPOSITION_NOT_RECORDED_REASON;
     return {
       sourceIssueId: input.issue.id,
       sourceIdentifier: input.issue.identifier,
@@ -2264,8 +2275,13 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       latestRunErrorCode: input.latestRun?.errorCode ?? null,
       retryReason: readNonEmptyString(context.retryReason) ?? null,
       recoveryCause: input.recoveryCause,
+      actionFailureCode: missingDispositionNotRecorded ? MISSING_DISPOSITION_NOT_RECORDED_REASON : null,
+      handoffWakeReason: readNonEmptyString(context.wakeReason) ?? null,
+      handoffReason: readNonEmptyString(context.handoffReason) ?? null,
+      handoffRequired: asBoolean(context.handoffRequired, false),
       sourceRunId: input.successfulRunHandoffEvidence?.sourceRunId ?? null,
       correctiveRunId: input.successfulRunHandoffEvidence?.correctiveRunId ?? null,
+      correctiveRunIssueCommentStatus: input.successfulRunHandoffEvidence?.correctiveRunIssueCommentStatus ?? null,
       missingDisposition: input.successfulRunHandoffEvidence?.missingDisposition ?? null,
       handoffAttempt: input.successfulRunHandoffEvidence?.handoffAttempt ?? null,
       maxHandoffAttempts: input.successfulRunHandoffEvidence?.maxHandoffAttempts ?? null,
@@ -2302,8 +2318,10 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         recoveryCause,
         successfulRunHandoffEvidence: input.successfulRunHandoffEvidence,
       }),
-      nextAction: recoveryCause === SUCCESSFUL_RUN_MISSING_STATE_REASON
-        ? "Choose and record a valid issue disposition without copying transcript content."
+      nextAction: isMissingDispositionRecoveryCause(recoveryCause)
+        ? recoveryCause === MISSING_DISPOSITION_NOT_RECORDED_REASON
+          ? "The status-only handoff run succeeded but did not record a valid issue disposition; choose and record one without copying transcript content."
+          : "Choose and record a valid issue disposition without copying transcript content."
         : recoveryCause === "workspace_validation_failed"
           ? "Repair the source issue workspace link, project workspace cwd, or git checkout before resuming adapter execution."
         : "Restore a live execution path, fix the runtime/adapter failure, or record an intentional manual resolution.",
@@ -2511,7 +2529,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     const recoveryOwner = recoveryAction.ownerAgentId ? await getAgent(recoveryAction.ownerAgentId) : null;
     const sourceAssignee = input.issue.assigneeAgentId ? await getAgent(input.issue.assigneeAgentId) : null;
     let notice: SuccessfulRunHandoffNotice | null = null;
-    if (input.recoveryCause === SUCCESSFUL_RUN_MISSING_STATE_REASON && input.successfulRunHandoffEvidence) {
+    if (isMissingDispositionRecoveryCause(recoveryCause) && input.successfulRunHandoffEvidence) {
       notice = buildSuccessfulRunHandoffExhaustedNotice({
         issue: input.issue,
         sourceRun: input.successfulRunHandoffEvidence.sourceRunId
@@ -2584,7 +2602,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       actorId: "system",
       agentId: null,
       runId: null,
-      action: input.recoveryCause === SUCCESSFUL_RUN_MISSING_STATE_REASON
+      action: isMissingDispositionRecoveryCause(recoveryCause)
         ? "issue.successful_run_handoff_escalated"
         : "issue.updated",
       entityType: "issue",
@@ -2593,8 +2611,10 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         identifier: input.issue.identifier,
         status: "blocked",
         previousStatus: input.previousStatus,
-        source: input.recoveryCause === SUCCESSFUL_RUN_MISSING_STATE_REASON
-          ? "recovery.reconcile_successful_run_handoff_missing_state"
+        source: isMissingDispositionRecoveryCause(recoveryCause)
+          ? recoveryCause === MISSING_DISPOSITION_NOT_RECORDED_REASON
+            ? "recovery.reconcile_successful_run_handoff_missing_disposition_not_recorded"
+            : "recovery.reconcile_successful_run_handoff_missing_state"
           : input.recoveryCause === "workspace_validation_failed"
             ? "recovery.reconcile_workspace_validation_failed"
           : "recovery.reconcile_stranded_assigned_issue",
@@ -2797,7 +2817,9 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
           issue,
           previousStatus: "in_progress",
           latestRun,
-          recoveryCause: SUCCESSFUL_RUN_MISSING_STATE_REASON,
+          recoveryCause: latestRun?.status === "succeeded"
+            ? MISSING_DISPOSITION_NOT_RECORDED_REASON
+            : SUCCESSFUL_RUN_MISSING_STATE_REASON,
           successfulRunHandoffEvidence: handoffEvidence,
         });
         if (updated) {
