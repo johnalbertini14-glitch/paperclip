@@ -96,6 +96,20 @@ function assertTimeZone(timeZone: string) {
   }
 }
 
+/**
+ * Returns a dedup key for an enabled schedule trigger: the tuple that makes two
+ * schedule triggers functionally identical (same kind + label + cronExpression).
+ * Only applies when the trigger is enabled; disabled triggers are excluded from
+ * the duplicate check since they have no runtime effect.
+ */
+function scheduleTriggerDedupKey(
+  trigger: typeof routineTriggers.$inferSelect,
+): string | null {
+  if (trigger.kind !== "schedule" || !trigger.enabled) return null;
+  const label = trigger.label ?? "";
+  return `${trigger.kind}\t${label}\t${trigger.cronExpression ?? ""}`;
+}
+
 function floorToMinute(date: Date) {
   const copy = new Date(date.getTime());
   copy.setUTCSeconds(0, 0);
@@ -1302,6 +1316,16 @@ export function routineService(
           return updated ?? createdRun;
         }
 
+        // Fail closed: do not create an audit issue with a null description.
+        // This prevents empty issues from being created when variable interpolation
+        // fails or the routine template was never configured with a body.
+        if (description == null) {
+          throw unprocessable(
+            `Routine ${input.routine.id} cannot create execution issue: interpolated description is null. ` +
+              `Verify the routine template includes a complete audit body per REVA-16796.`,
+          );
+        }
+
         try {
           createdIssue = await issueSvc.create(input.routine.companyId, {
             projectId,
@@ -1823,6 +1847,28 @@ export function routineService(
         };
       }
 
+      // Reject duplicate enabled schedule triggers: same kind + label + cronExpression
+      if (input.enabled !== false && input.kind === "schedule") {
+        const newKey = `${input.kind}\t${input.label ?? ""}\t${input.cronExpression}`;
+        const existingTriggers = await db
+          .select()
+          .from(routineTriggers)
+          .where(
+            and(
+              eq(routineTriggers.routineId, routine.id),
+              eq(routineTriggers.kind, "schedule"),
+              eq(routineTriggers.enabled, true),
+            ),
+          );
+        for (const t of existingTriggers) {
+          if (scheduleTriggerDedupKey(t) === newKey) {
+            throw conflict(
+              `An enabled schedule trigger with label "${input.label ?? ""}" and cron "${input.cronExpression}" already exists on this routine`,
+            );
+          }
+        }
+      }
+
       const { trigger, revision } = await db.transaction(async (tx) => {
         const txDb = tx as unknown as Db;
         await tx.execute(sql`select id from ${routines} where ${routines.id} = ${routine.id} for update`);
@@ -1893,6 +1939,34 @@ export function routineService(
         }
         if ((patch.enabled ?? existing.enabled) === true) {
           assertScheduleCompatibleVariables(routine.variables ?? []);
+        }
+      }
+
+      // Reject duplicate enabled schedule triggers after applying the patch
+      if (existing.kind === "schedule") {
+        const willBeEnabled = patch.enabled !== false && (patch.enabled ?? existing.enabled) === true;
+        if (willBeEnabled) {
+          const effectiveLabel = patch.label === undefined ? existing.label : patch.label;
+          const effectiveCron = patch.cronExpression !== undefined ? patch.cronExpression : existing.cronExpression;
+          const newKey = `schedule\t${effectiveLabel ?? ""}\t${effectiveCron ?? ""}`;
+          const otherTriggers = await db
+            .select()
+            .from(routineTriggers)
+            .where(
+              and(
+                eq(routineTriggers.routineId, existing.routineId),
+                eq(routineTriggers.kind, "schedule"),
+                eq(routineTriggers.enabled, true),
+                ne(routineTriggers.id, id),
+              ),
+            );
+          for (const t of otherTriggers) {
+            if (scheduleTriggerDedupKey(t) === newKey) {
+              throw conflict(
+                `An enabled schedule trigger with label "${effectiveLabel ?? ""}" and cron "${effectiveCron ?? ""}" already exists on this routine`,
+              );
+            }
+          }
         }
       }
 
@@ -2451,10 +2525,16 @@ export function routineService(
         }
 
         for (let i = 0; i < runCount; i += 1) {
+          // Use a tick-indexed idempotency key so catch-up iterations for the same
+          // trigger+window never produce more than one issue. The key is scoped to
+          // (routine, trigger, tickIndex) so concurrent scheduler wakes for the same
+          // tick are also deduplicated.
+          const idempotencyKey = `schedule:${row.trigger.id}:${i}`;
           await dispatchRoutineRun({
             routine: row.routine,
             trigger: row.trigger,
             source: "schedule",
+            idempotencyKey,
           });
           triggered += 1;
         }
