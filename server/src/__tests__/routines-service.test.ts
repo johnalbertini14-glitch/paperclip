@@ -1689,6 +1689,36 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     ).rejects.toMatchObject({ status: 409 });
   });
 
+  it("serializes concurrent duplicate enabled schedule trigger creation", async () => {
+    const { routine, svc } = await seedFixture();
+    const attempts = await Promise.allSettled([
+      svc.createTrigger(
+        routine.id,
+        { kind: "schedule", label: "Every 30 min watchdog", cronExpression: "*/30 * * * *", timezone: "UTC" },
+        {},
+      ),
+      svc.createTrigger(
+        routine.id,
+        { kind: "schedule", label: "Every 30 min watchdog", cronExpression: "*/30 * * * *", timezone: "UTC" },
+        {},
+      ),
+    ]);
+
+    expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
+    const rejected = attempts.find((attempt) => attempt.status === "rejected");
+    expect(rejected).toMatchObject({ reason: { status: 409 } });
+
+    const triggers = await db
+      .select({ id: routineTriggers.id })
+      .from(routineTriggers)
+      .where(and(
+        eq(routineTriggers.routineId, routine.id),
+        eq(routineTriggers.kind, "schedule"),
+        eq(routineTriggers.enabled, true),
+      ));
+    expect(triggers).toHaveLength(1);
+  });
+
   it("allows a second enabled schedule trigger when label differs", async () => {
     const { routine, svc } = await seedFixture();
     await svc.createTrigger(
@@ -1834,7 +1864,7 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     ).rejects.toMatchObject({ status: 409 });
   });
 
-  it("suppresses duplicate issues from catch-up iterations when catchUpPolicy is enqueue_missed_with_cap", async () => {
+  it("uses target-window idempotency keys for catch-up iterations", async () => {
     const { companyId, agentId, projectId, svc } = await seedFixture();
     const weeklyRoutine = await svc.create(
       companyId,
@@ -1858,7 +1888,7 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
       label: "Weekly audit",
       cronExpression: "0 9 * * 1",
       timezone: "UTC",
-    });
+    }, { agentId });
 
     // Simulate the scheduler waking up with a backlog of 3 missed weeks
     // (e.g. the scheduler was down for 3 weeks and is now catching up).
@@ -1873,30 +1903,155 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     const now = new Date("2026-06-15T09:00:00.000Z");
     const result = await svc.tickScheduledTriggers(now);
 
-    // tickCount = 3 (missed), but only 1 issue should be created (index 0),
-    // because the idempotency key for each catch-up iteration deduplicates.
     expect(result.triggered).toBe(3);
 
-    // Exactly 1 issue should exist despite 3 catch-up iterations
     const createdIssues = await db
-      .select({ id: issues.id, title: issues.title })
+      .select({ id: issues.id, title: issues.title, description: issues.description })
       .from(issues)
       .where(eq(issues.originId, weeklyRoutine.id));
-    expect(createdIssues).toHaveLength(1);
-    expect(createdIssues[0].title).toBe("weekly audit for 2026-06-01");
+    expect(createdIssues.map((issue) => issue.title).sort()).toEqual([
+      "weekly audit for 2026-06-01",
+      "weekly audit for 2026-06-08",
+      "weekly audit for 2026-06-15",
+    ]);
+    expect(createdIssues.map((issue) => issue.description).sort()).toEqual([
+      "Audit report for week of 2026-06-01",
+      "Audit report for week of 2026-06-08",
+      "Audit report for week of 2026-06-15",
+    ]);
 
-    // Exactly 3 routine_runs should exist (one per tick), all with issue_created status
     const runs = await db
-      .select({ id: routineRuns.id, status: routineRuns.status, idempotencyKey: routineRuns.idempotencyKey })
+      .select({
+        id: routineRuns.id,
+        status: routineRuns.status,
+        idempotencyKey: routineRuns.idempotencyKey,
+        triggerPayload: routineRuns.triggerPayload,
+      })
       .from(routineRuns)
       .where(eq(routineRuns.routineId, weeklyRoutine.id));
     expect(runs).toHaveLength(3);
-    expect(runs.filter((r) => r.status === "issue_created")).toHaveLength(1);
-    expect(runs.filter((r) => r.status === "coalesced")).toHaveLength(2);
-    // Idempotency keys should be distinct across iterations
-    const idempotencyKeys = runs.map((r) => r.idempotencyKey).filter(Boolean);
-    expect(new Set(idempotencyKeys).size).toBe(3);
-  });
+    expect(runs.map((r) => r.status)).toEqual(["issue_created", "issue_created", "issue_created"]);
+    expect(runs.map((r) => r.idempotencyKey).sort()).toEqual([
+      `schedule:${trigger.id}:2026-06-01T09:00:00.000Z`,
+      `schedule:${trigger.id}:2026-06-08T09:00:00.000Z`,
+      `schedule:${trigger.id}:2026-06-15T09:00:00.000Z`,
+    ]);
+    expect(
+      runs
+        .map((r) => (r.triggerPayload as { schedule?: { scheduledDate?: string } } | null)?.schedule?.scheduledDate)
+        .sort(),
+    ).toEqual(["2026-06-01", "2026-06-08", "2026-06-15"]);
+  }, 20_000);
+
+  it("coalesces a scheduled retry into a recent completed issue with the same fingerprint", async () => {
+    const { companyId, agentId, projectId, svc } = await seedFixture();
+    const weeklyRoutine = await svc.create(
+      companyId,
+      {
+        projectId,
+        goalId: null,
+        parentIssueId: null,
+        title: "weekly audit",
+        description: "Complete weekly audit body",
+        assigneeAgentId: agentId,
+        priority: "medium",
+        status: "active",
+        concurrencyPolicy: "coalesce_if_active",
+        catchUpPolicy: "skip_missed",
+      },
+      {},
+    );
+
+    const { trigger } = await svc.createTrigger(weeklyRoutine.id, {
+      kind: "schedule",
+      label: "Weekly audit",
+      cronExpression: "0 9 * * 1",
+      timezone: "UTC",
+    }, { agentId });
+    const fireTime = new Date("2026-06-15T09:00:00.000Z");
+    await db
+      .update(routineTriggers)
+      .set({ nextRunAt: fireTime })
+      .where(eq(routineTriggers.id, trigger.id));
+
+    const firstResult = await svc.tickScheduledTriggers(new Date("2026-06-15T09:01:00.000Z"));
+    expect(firstResult.triggered).toBe(1);
+
+    const [first] = await db
+      .select({
+        id: routineRuns.id,
+        status: routineRuns.status,
+        linkedIssueId: routineRuns.linkedIssueId,
+        idempotencyKey: routineRuns.idempotencyKey,
+      })
+      .from(routineRuns)
+      .where(eq(routineRuns.routineId, weeklyRoutine.id));
+    expect(first).toEqual(expect.objectContaining({
+      status: "issue_created",
+      idempotencyKey: `schedule:${trigger.id}:2026-06-15T09:00:00.000Z`,
+    }));
+    if (!first) throw new Error("Expected initial scheduled routine run");
+    expect(first.linkedIssueId).toBeTruthy();
+
+    // Emulate a historical scheduled run created before schedule-window
+    // idempotency keys existed. The same-window retry must still find the issue
+    // by dispatch fingerprint instead of creating a duplicate.
+    await db.update(routineRuns).set({ idempotencyKey: null }).where(eq(routineRuns.id, first.id));
+
+    const [firstIssue] = await db
+      .select({ id: issues.id, executionRunId: issues.executionRunId })
+      .from(issues)
+      .where(eq(issues.id, first.linkedIssueId!));
+    if (firstIssue?.executionRunId) {
+      await db
+        .update(heartbeatRuns)
+        .set({ status: "succeeded", finishedAt: new Date("2026-06-15T09:05:00.000Z") })
+        .where(eq(heartbeatRuns.id, firstIssue.executionRunId));
+    }
+    await db
+      .update(issues)
+      .set({
+        status: "done",
+        completedAt: new Date("2026-06-15T09:06:00.000Z"),
+        updatedAt: new Date("2026-06-15T09:06:00.000Z"),
+      })
+      .where(eq(issues.id, first.linkedIssueId!));
+    await db
+      .update(routineTriggers)
+      .set({ nextRunAt: fireTime })
+      .where(eq(routineTriggers.id, trigger.id));
+
+    const retryResult = await svc.tickScheduledTriggers(new Date("2026-06-15T09:02:00.000Z"));
+    expect(retryResult.triggered).toBe(1);
+
+    const runs = await db
+      .select({
+        id: routineRuns.id,
+        status: routineRuns.status,
+        linkedIssueId: routineRuns.linkedIssueId,
+        coalescedIntoRunId: routineRuns.coalescedIntoRunId,
+      })
+      .from(routineRuns)
+      .where(eq(routineRuns.routineId, weeklyRoutine.id));
+    expect(runs).toHaveLength(2);
+    const retry = runs.find((run) => run.status === "coalesced");
+    expect(retry).toEqual(expect.objectContaining({
+      linkedIssueId: first.linkedIssueId,
+      coalescedIntoRunId: first.id,
+    }));
+
+    const createdIssues = await db
+      .select({ id: issues.id, title: issues.title, description: issues.description })
+      .from(issues)
+      .where(eq(issues.originId, weeklyRoutine.id));
+    expect(createdIssues).toEqual([
+      expect.objectContaining({
+        id: first.linkedIssueId,
+        title: "weekly audit",
+        description: "Complete weekly audit body",
+      }),
+    ]);
+  }, 20_000);
 
   it("suppresses duplicate issues from concurrent scheduler wakes for the same tick", async () => {
     const { companyId, agentId, projectId, svc } = await seedFixture();
@@ -1922,7 +2077,7 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
       label: "Daily",
       cronExpression: "0 8 * * *",
       timezone: "UTC",
-    });
+    }, { agentId });
 
     // Set the trigger's nextRunAt to "now" so it fires
     const fireTime = new Date("2026-06-10T08:00:00.000Z");
@@ -1944,24 +2099,21 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     expect(createdIssues).toHaveLength(1);
   });
 
-  it("fails closed when routine description interpolates to null", async () => {
+  it("fails closed without creating an execution issue when the routine description is null", async () => {
     const { companyId, agentId, projectId, svc } = await seedFixture();
-    // Create a routine whose description template references an undefined variable
-    // and has no default — the variable cannot be resolved, so interpolation returns null
     const noDescRoutine = await svc.create(
       companyId,
       {
         projectId,
         goalId: null,
         parentIssueId: null,
-        title: "audit {{missing_var}}",
-        description: "Audit for {{missing_var}}", // required var with no default
+        title: "audit without body",
+        description: null,
         assigneeAgentId: agentId,
         priority: "medium",
         status: "active",
         concurrencyPolicy: "coalesce_if_active",
         catchUpPolicy: "skip_missed",
-        variables: [{ name: "missing_var", label: null, type: "text", defaultValue: null, required: true, options: [] }],
       },
       {},
     );
@@ -1971,7 +2123,7 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
       label: "Daily",
       cronExpression: "0 9 * * *",
       timezone: "UTC",
-    });
+    }, { agentId });
 
     // Advance past the trigger time
     const now = new Date("2026-06-15T09:00:00.000Z");
@@ -1980,7 +2132,20 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
       .set({ nextRunAt: new Date("2026-06-14T09:00:00.000Z") })
       .where(eq(routineTriggers.id, trigger.id));
 
-    // Expect the tick to throw rather than create a null-description issue
-    await expect(svc.tickScheduledTriggers(now)).rejects.toThrow(/description.*null/i);
-  });
+    const result = await svc.tickScheduledTriggers(now);
+    expect(result.triggered).toBe(1);
+
+    const runs = await db
+      .select({ status: routineRuns.status, failureReason: routineRuns.failureReason, linkedIssueId: routineRuns.linkedIssueId })
+      .from(routineRuns)
+      .where(eq(routineRuns.routineId, noDescRoutine.id));
+    expect(runs).toEqual([
+      expect.objectContaining({
+        status: "failed",
+        linkedIssueId: null,
+        failureReason: expect.stringMatching(/description is null/i),
+      }),
+    ]);
+    await expect(db.select().from(issues).where(eq(issues.originId, noDescRoutine.id))).resolves.toHaveLength(0);
+  }, 20_000);
 });

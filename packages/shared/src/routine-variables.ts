@@ -37,8 +37,7 @@ const HUMAN_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("en-US", {
  * `date` expands to the current date in YYYY-MM-DD format (UTC).
  * `timestamp` expands to a human-readable date and time (e.g. "April 28, 2026 at 12:17 PM UTC").
  */
-export function getBuiltinRoutineVariableValues(): Record<string, string> {
-  const now = new Date();
+export function getBuiltinRoutineVariableValues(now: Date = new Date()): Record<string, string> {
   return {
     date: now.toISOString().slice(0, 10),
     timestamp: HUMAN_TIMESTAMP_FORMATTER.format(now),
