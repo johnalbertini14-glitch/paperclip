@@ -25,6 +25,10 @@ import { errorHandler } from "../middleware/index.js";
 import { issueRoutes } from "../routes/issues.js";
 import { issueRecoveryActionService } from "../services/issue-recovery-actions.js";
 import { recoveryService } from "../services/recovery/service.js";
+import {
+  FINISH_SUCCESSFUL_RUN_HANDOFF_REASON,
+  SUCCESSFUL_RUN_MISSING_STATE_REASON,
+} from "../services/recovery/successful-run-handoff.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -321,6 +325,112 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       issueId: sourceIssue.id,
       sourceIssueId: sourceIssue.id,
       recoveryCause: "stranded_assigned_issue",
+    });
+  });
+
+  it("records missing_disposition_not_recorded when a successful status-only handoff leaves the source issue in progress", async () => {
+    const { companyId, managerId, coderId, sourceIssue } = await seedCompany();
+    const sourceRunId = randomUUID();
+    const correctiveRunId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: correctiveRunId,
+      companyId,
+      agentId: coderId,
+      invocationSource: "automation",
+      status: "succeeded",
+      startedAt: new Date("2026-06-11T22:45:00.000Z"),
+      finishedAt: new Date("2026-06-11T22:46:00.000Z"),
+      issueCommentStatus: "satisfied",
+      contextSnapshot: {
+        issueId: sourceIssue.id,
+        taskId: sourceIssue.id,
+        wakeReason: FINISH_SUCCESSFUL_RUN_HANDOFF_REASON,
+        handoffRequired: true,
+        handoffReason: SUCCESSFUL_RUN_MISSING_STATE_REASON,
+        missingDisposition: "clear_next_step",
+        handoffAttempt: 1,
+        maxHandoffAttempts: 1,
+        sourceRunId,
+      },
+    });
+    const enqueueWakeup = vi.fn(async () => null);
+    const recovery = recoveryService(db, { enqueueWakeup });
+
+    const result = await recovery.reconcileStrandedAssignedIssues();
+
+    expect(result.successfulRunHandoffEscalated).toBe(1);
+    expect(result.issueIds).toContain(sourceIssue.id);
+    const actionRows = await db
+      .select()
+      .from(issueRecoveryActions)
+      .where(eq(issueRecoveryActions.sourceIssueId, sourceIssue.id));
+    expect(actionRows).toHaveLength(1);
+    expect(actionRows[0]).toMatchObject({
+      kind: "missing_disposition",
+      status: "active",
+      ownerAgentId: managerId,
+      previousOwnerAgentId: coderId,
+      returnOwnerAgentId: coderId,
+      cause: "missing_disposition_not_recorded",
+    });
+    expect(actionRows[0]?.nextAction).toContain("status-only handoff run succeeded");
+    expect(actionRows[0]?.evidence).toMatchObject({
+      sourceIssueId: sourceIssue.id,
+      latestIssueStatus: "in_progress",
+      latestRunId: correctiveRunId,
+      latestRunStatus: "succeeded",
+      recoveryCause: "missing_disposition_not_recorded",
+      actionFailureCode: "missing_disposition_not_recorded",
+      handoffWakeReason: FINISH_SUCCESSFUL_RUN_HANDOFF_REASON,
+      handoffReason: SUCCESSFUL_RUN_MISSING_STATE_REASON,
+      handoffRequired: true,
+      sourceRunId,
+      correctiveRunId,
+      correctiveRunIssueCommentStatus: "satisfied",
+      missingDisposition: "clear_next_step",
+      handoffAttempt: 1,
+      maxHandoffAttempts: 1,
+    });
+
+    const [updatedIssue] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+    expect(updatedIssue).toMatchObject({
+      status: "blocked",
+      assigneeAgentId: managerId,
+    });
+    const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, sourceIssue.id));
+    expect(comments).toHaveLength(1);
+    expect(comments[0]?.metadata).toMatchObject({
+      sourceRunId,
+    });
+
+    const activityRows = await db
+      .select()
+      .from(activityLog)
+      .where(eq(activityLog.entityId, sourceIssue.id));
+    expect(activityRows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "issue.successful_run_handoff_escalated",
+          details: expect.objectContaining({
+            source: "recovery.reconcile_successful_run_handoff_missing_disposition_not_recorded",
+            recoveryCause: "missing_disposition_not_recorded",
+            latestRunId: correctiveRunId,
+            latestRunStatus: "succeeded",
+          }),
+        }),
+      ]),
+    );
+    expect(activityRows).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "issue.successful_run_handoff_resolved",
+        }),
+      ]),
+    );
+    expect(enqueueWakeup.mock.calls[0]?.[1]?.payload).toMatchObject({
+      issueId: sourceIssue.id,
+      sourceIssueId: sourceIssue.id,
+      recoveryCause: "missing_disposition_not_recorded",
     });
   });
 

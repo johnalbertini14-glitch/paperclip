@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { and, asc, desc, eq, inArray, isNotNull, isNull, lte, ne, not, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, not, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -66,6 +66,9 @@ const LIVE_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"];
 const TERMINAL_ISSUE_STATUSES = new Set(["done", "cancelled"]);
 const MAX_CATCH_UP_RUNS = 25;
 const MAX_ROUTINE_REVISIONS = 100;
+// When scheduled coalescing finds no live open issue, look for a recent same-window
+// issue to suppress duplicate creation after a retry or completed execution run.
+const RECENT_COMPLETED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const WEEKDAY_INDEX: Record<string, number> = {
   Sun: 0,
   Mon: 1,
@@ -93,6 +96,53 @@ function assertTimeZone(timeZone: string) {
     getZonedMinuteFormatter(timeZone).format(new Date());
   } catch {
     throw unprocessable(`Invalid timezone: ${timeZone}`);
+  }
+}
+
+/**
+ * Returns a dedup key for an enabled schedule trigger: the tuple that makes two
+ * schedule triggers functionally identical (same kind + label + cronExpression).
+ * Only applies when the trigger is enabled; disabled triggers are excluded from
+ * the duplicate check since they have no runtime effect.
+ */
+function scheduleTriggerDedupKey(
+  trigger: typeof routineTriggers.$inferSelect,
+): string | null {
+  if (trigger.kind !== "schedule" || !trigger.enabled) return null;
+  const label = trigger.label ?? "";
+  return `${trigger.kind}\t${label}\t${trigger.cronExpression ?? ""}`;
+}
+
+async function assertNoDuplicateEnabledScheduleTrigger(
+  executor: Db,
+  input: {
+    routineId: string;
+    label: string | null | undefined;
+    cronExpression: string | null | undefined;
+    excludeTriggerId?: string;
+  },
+) {
+  const newKey = `schedule\t${input.label ?? ""}\t${input.cronExpression ?? ""}`;
+  const filters = [
+    eq(routineTriggers.routineId, input.routineId),
+    eq(routineTriggers.kind, "schedule"),
+    eq(routineTriggers.enabled, true),
+  ];
+  if (input.excludeTriggerId) {
+    filters.push(ne(routineTriggers.id, input.excludeTriggerId));
+  }
+
+  const existingTriggers = await executor
+    .select()
+    .from(routineTriggers)
+    .where(and(...filters));
+
+  for (const trigger of existingTriggers) {
+    if (scheduleTriggerDedupKey(trigger) === newKey) {
+      throw conflict(
+        `An enabled schedule trigger with label "${input.label ?? ""}" and cron "${input.cronExpression ?? ""}" already exists on this routine`,
+      );
+    }
   }
 }
 
@@ -1012,6 +1062,36 @@ export function routineService(
       .then((rows) => rows[0]?.issues ?? null);
   }
 
+  async function findRecentExecutionIssue(
+    routine: typeof routines.$inferSelect,
+    triggeredAt: Date,
+    executor: Db = db,
+    dispatchFingerprint?: string | null,
+    origin?: { kind: string; id: string | null },
+  ) {
+    if (!dispatchFingerprint) return null;
+    const originKind = origin?.kind ?? "routine_execution";
+    const originId = origin?.id ?? routine.id;
+    const recentThreshold = new Date(triggeredAt.getTime() - RECENT_COMPLETED_WINDOW_MS);
+    return executor
+      .select()
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, routine.companyId),
+          eq(issues.originKind, originKind),
+          eq(issues.originId, originId),
+          eq(issues.originFingerprint, dispatchFingerprint),
+          isNull(issues.hiddenAt),
+          ne(issues.status, "cancelled"),
+          gte(issues.createdAt, recentThreshold),
+        ),
+      )
+      .orderBy(desc(issues.updatedAt), desc(issues.createdAt))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+  }
+
   async function finalizeRun(runId: string, patch: Partial<typeof routineRuns.$inferInsert>, executor: Db = db) {
     return executor
       .update(routineRuns)
@@ -1167,6 +1247,7 @@ export function routineService(
     executionWorkspaceId?: string | null;
     executionWorkspacePreference?: string | null;
     executionWorkspaceSettings?: Record<string, unknown> | null;
+    builtinVariableDate?: Date;
     actor?: Actor;
   }) {
     const projectId = input.projectId ?? input.routine.projectId ?? null;
@@ -1199,7 +1280,11 @@ export function routineService(
       ...input,
       automaticVariables,
     });
-    const allVariables = { ...getBuiltinRoutineVariableValues(), ...automaticVariables, ...resolvedVariables };
+    const allVariables = {
+      ...getBuiltinRoutineVariableValues(input.builtinVariableDate),
+      ...automaticVariables,
+      ...resolvedVariables,
+    };
     const title = interpolateRoutineTemplate(input.routine.title, allVariables) ?? input.routine.title;
     const description = interpolateRoutineTemplate(input.routine.description, allVariables);
     const triggerPayload = mergeRoutineRunPayload(input.payload, { ...automaticVariables, ...resolvedVariables });
@@ -1302,6 +1387,40 @@ export function routineService(
           return updated ?? createdRun;
         }
 
+        if (input.source === "schedule" && input.routine.concurrencyPolicy !== "always_enqueue") {
+          const recentIssue = await findRecentExecutionIssue(input.routine, triggeredAt, txDb, dispatchFingerprint, {
+            kind: issueOriginKind,
+            id: issueOriginId,
+          });
+          if (recentIssue) {
+            const updated = await finalizeRun(createdRun.id, {
+              status: "coalesced",
+              linkedIssueId: recentIssue.id,
+              coalescedIntoRunId: recentIssue.originRunId,
+              completedAt: triggeredAt,
+            }, txDb);
+            await updateRoutineTouchedState({
+              routineId: input.routine.id,
+              triggerId: input.trigger?.id ?? null,
+              triggeredAt,
+              status: "coalesced",
+              issueId: recentIssue.id,
+              nextRunAt,
+            }, txDb);
+            return updated ?? createdRun;
+          }
+        }
+
+        // Fail closed: do not create an audit issue with a null description.
+        // This prevents empty issues from being created when variable interpolation
+        // fails or the routine template was never configured with a body.
+        if (description == null) {
+          throw unprocessable(
+            `Routine ${input.routine.id} cannot create execution issue: interpolated description is null. ` +
+              `Verify the routine template includes a complete audit body per REVA-16796.`,
+          );
+        }
+
         try {
           createdIssue = await issueSvc.create(input.routine.companyId, {
             projectId,
@@ -1335,10 +1454,17 @@ export function routineService(
             throw error;
           }
 
-          const existingIssue = await findLiveExecutionIssue(input.routine, txDb, dispatchFingerprint, {
-            kind: issueOriginKind,
-            id: issueOriginId,
-          });
+          const existingIssue =
+            await findLiveExecutionIssue(input.routine, txDb, dispatchFingerprint, {
+              kind: issueOriginKind,
+              id: issueOriginId,
+            }) ??
+            (input.source === "schedule"
+              ? await findRecentExecutionIssue(input.routine, triggeredAt, txDb, dispatchFingerprint, {
+                  kind: issueOriginKind,
+                  id: issueOriginId,
+                })
+              : null);
           if (!existingIssue) throw error;
           const status = input.routine.concurrencyPolicy === "skip_if_active" ? "skipped" : "coalesced";
           if (manualRunnerUserId) {
@@ -1826,6 +1952,13 @@ export function routineService(
       const { trigger, revision } = await db.transaction(async (tx) => {
         const txDb = tx as unknown as Db;
         await tx.execute(sql`select id from ${routines} where ${routines.id} = ${routine.id} for update`);
+        if (input.enabled !== false && input.kind === "schedule") {
+          await assertNoDuplicateEnabledScheduleTrigger(txDb, {
+            routineId: routine.id,
+            label: input.label,
+            cronExpression: input.cronExpression,
+          });
+        }
         const [createdTrigger] = await txDb
           .insert(routineTriggers)
           .values({
@@ -1899,6 +2032,17 @@ export function routineService(
       const result = await db.transaction(async (tx) => {
         const txDb = tx as unknown as Db;
         await tx.execute(sql`select id from ${routines} where ${routines.id} = ${existing.routineId} for update`);
+        if (existing.kind === "schedule") {
+          const willBeEnabled = patch.enabled !== false && (patch.enabled ?? existing.enabled) === true;
+          if (willBeEnabled) {
+            await assertNoDuplicateEnabledScheduleTrigger(txDb, {
+              routineId: existing.routineId,
+              label: patch.label === undefined ? existing.label : patch.label,
+              cronExpression: patch.cronExpression !== undefined ? patch.cronExpression : existing.cronExpression,
+              excludeTriggerId: id,
+            });
+          }
+        }
         const [updated] = await txDb
           .update(routineTriggers)
           .set({
@@ -2410,14 +2554,14 @@ export function routineService(
         // project are never suppressed here.
         const projectPaused = !!(row.routine.projectId && row.projectPausedAt);
 
-        let runCount = 1;
+        const scheduledRunTimes: Date[] = [row.trigger.nextRunAt];
         let claimedNextRunAt = nextCronTickInTimeZone(row.trigger.cronExpression, row.trigger.timezone, now);
 
         if (!projectPaused && row.routine.catchUpPolicy === "enqueue_missed_with_cap") {
           let cursor: Date | null = row.trigger.nextRunAt;
-          runCount = 0;
-          while (cursor && cursor <= now && runCount < MAX_CATCH_UP_RUNS) {
-            runCount += 1;
+          scheduledRunTimes.length = 0;
+          while (cursor && cursor <= now && scheduledRunTimes.length < MAX_CATCH_UP_RUNS) {
+            scheduledRunTimes.push(cursor);
             claimedNextRunAt = nextCronTickInTimeZone(row.trigger.cronExpression, row.trigger.timezone, cursor);
             cursor = claimedNextRunAt;
           }
@@ -2450,11 +2594,22 @@ export function routineService(
           continue;
         }
 
-        for (let i = 0; i < runCount; i += 1) {
+        for (const scheduledAt of scheduledRunTimes) {
+          const scheduledAtIso = scheduledAt.toISOString();
+          const scheduledDate = scheduledAtIso.slice(0, 10);
+          const idempotencyKey = `schedule:${row.trigger.id}:${scheduledAtIso}`;
           await dispatchRoutineRun({
             routine: row.routine,
             trigger: row.trigger,
             source: "schedule",
+            payload: {
+              schedule: {
+                scheduledAt: scheduledAtIso,
+                scheduledDate,
+              },
+            },
+            idempotencyKey,
+            builtinVariableDate: scheduledAt,
           });
           triggered += 1;
         }

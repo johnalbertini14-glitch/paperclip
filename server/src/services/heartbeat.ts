@@ -2049,6 +2049,29 @@ export function shouldResetTaskSessionForWake(
   return false;
 }
 
+// REVA-16821: pure predicates for the timer-wake no-op preflight.
+// isTimerPreflightCandidate — determines whether a wake should go through the
+// preflight check. Matches the condition in enqueueWakeup:
+//   if (!issueId && source === "timer")
+// Explicit issue/comment/approval/interaction contexts bypass it.
+export function isTimerPreflightCandidate(contextSnapshot: Record<string, unknown> | null | undefined): boolean {
+  if (!contextSnapshot) return false;
+  const source = contextSnapshot["source"] as string | undefined;
+  const wakeReason = readNonEmptyString(contextSnapshot.wakeReason);
+  if (wakeReason !== "heartbeat_timer") return false;
+  if (source !== "timer") return false; // preflight only fires for timer-source wakes
+  // Any explicit issue or comment context means there is concrete work to do.
+  if (contextSnapshot.issueId) return false;
+  if (contextSnapshot.commentId) return false;
+  return true;
+}
+
+// hasActionableTimerWork — combines live-run and issue workload signals.
+// If either is true, the timer wake has something to act on and should proceed.
+export function hasActionableTimerWork(input: { hasLiveRun: boolean; hasActionableIssues: boolean }): boolean {
+  return input.hasLiveRun || input.hasActionableIssues;
+}
+
 function shouldRequireIssueCommentForWake(
   contextSnapshot: Record<string, unknown> | null | undefined,
 ) {
@@ -10295,6 +10318,48 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           releasePolicy: activePauseHold.releasePolicy,
           interaction: true,
         };
+      }
+    }
+
+    // REVA-16821: no-op preflight for timer wakes — avoid launching the ACPX/Codex
+    // adapter when there is no actionable work for this agent. Timer wakes without
+    // an explicit issue/comment/approval/interaction context are pure polling; if
+    // the agent has neither a live run nor any todo/backlog/in_progress/blocked
+    // issues assigned to it, there is nothing useful to discover and creating a
+    // fresh ACPX session just burns spend.
+    if (!issueId && source === "timer") {
+      const hasLiveInvocation = await db
+        .select({ id: heartbeatRuns.id })
+        .from(heartbeatRuns)
+        .where(
+          and(
+            eq(heartbeatRuns.agentId, agentId),
+            eq(heartbeatRuns.status, "running"),
+            sql`${heartbeatRuns.createdAt} > NOW() - INTERVAL '5 minutes'`,
+          ),
+        )
+        .then((rows) => rows.length > 0);
+
+      if (!hasLiveInvocation) {
+        const actionableIssues = await db
+          .select({ id: issues.id })
+          .from(issues)
+          .where(
+            and(
+              eq(issues.assigneeAgentId, agentId),
+              isNull(issues.assigneeUserId),
+              inArray(issues.status, ["todo", "in_progress", "backlog", "blocked"]),
+            ),
+          )
+          .limit(1)
+          .then((rows) => rows.length > 0);
+
+        if (!actionableIssues) {
+          await writeSkippedRequest("timer_preflight.no_actionable_work", {
+            error: "Timer wake skipped: no live run and no actionable issues assigned to agent",
+          });
+          return null;
+        }
       }
     }
 

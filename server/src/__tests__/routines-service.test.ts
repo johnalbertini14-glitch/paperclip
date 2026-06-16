@@ -1,5 +1,5 @@
 import { createHmac, randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   activityLog,
@@ -1671,4 +1671,481 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     expect(runsAfterResume).toHaveLength(2);
     expect(runsAfterResume.some((run) => run.status === "issue_created")).toBe(true);
   });
+
+  it("rejects creating a second enabled schedule trigger with the same label and cronExpression", async () => {
+    const { routine, svc } = await seedFixture();
+    await svc.createTrigger(
+      routine.id,
+      { kind: "schedule", label: "Every 30 min watchdog", cronExpression: "*/30 * * * *", timezone: "UTC" },
+      {},
+    );
+
+    await expect(
+      svc.createTrigger(
+        routine.id,
+        { kind: "schedule", label: "Every 30 min watchdog", cronExpression: "*/30 * * * *", timezone: "UTC" },
+        {},
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("serializes concurrent duplicate enabled schedule trigger creation", async () => {
+    const { routine, svc } = await seedFixture();
+    const attempts = await Promise.allSettled([
+      svc.createTrigger(
+        routine.id,
+        { kind: "schedule", label: "Every 30 min watchdog", cronExpression: "*/30 * * * *", timezone: "UTC" },
+        {},
+      ),
+      svc.createTrigger(
+        routine.id,
+        { kind: "schedule", label: "Every 30 min watchdog", cronExpression: "*/30 * * * *", timezone: "UTC" },
+        {},
+      ),
+    ]);
+
+    expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
+    const rejected = attempts.find((attempt) => attempt.status === "rejected");
+    expect(rejected).toMatchObject({ reason: { status: 409 } });
+
+    const triggers = await db
+      .select({ id: routineTriggers.id })
+      .from(routineTriggers)
+      .where(and(
+        eq(routineTriggers.routineId, routine.id),
+        eq(routineTriggers.kind, "schedule"),
+        eq(routineTriggers.enabled, true),
+      ));
+    expect(triggers).toHaveLength(1);
+  });
+
+  it("allows a second enabled schedule trigger when label differs", async () => {
+    const { routine, svc } = await seedFixture();
+    await svc.createTrigger(
+      routine.id,
+      { kind: "schedule", label: "Every 30 min watchdog", cronExpression: "*/30 * * * *", timezone: "UTC" },
+      {},
+    );
+
+    const { trigger } = await svc.createTrigger(
+      routine.id,
+      { kind: "schedule", label: "Hourly watchdog", cronExpression: "*/30 * * * *", timezone: "UTC" },
+      {},
+    );
+    expect(trigger.label).toBe("Hourly watchdog");
+  });
+
+  it("allows a second enabled schedule trigger when cronExpression differs", async () => {
+    const { routine, svc } = await seedFixture();
+    await svc.createTrigger(
+      routine.id,
+      { kind: "schedule", label: "Every 30 min watchdog", cronExpression: "*/30 * * * *", timezone: "UTC" },
+      {},
+    );
+
+    const { trigger } = await svc.createTrigger(
+      routine.id,
+      { kind: "schedule", label: "Every 30 min watchdog", cronExpression: "0 * * * *", timezone: "UTC" },
+      {},
+    );
+    expect(trigger.cronExpression).toBe("0 * * * *");
+  });
+
+  it("allows a second schedule trigger with same label/cron when the first is disabled", async () => {
+    const { routine, svc } = await seedFixture();
+    const { trigger: first } = await svc.createTrigger(
+      routine.id,
+      { kind: "schedule", label: "Every 30 min watchdog", cronExpression: "*/30 * * * *", timezone: "UTC", enabled: false },
+      {},
+    );
+    expect(first.enabled).toBe(false);
+
+    const { trigger: second } = await svc.createTrigger(
+      routine.id,
+      { kind: "schedule", label: "Every 30 min watchdog", cronExpression: "*/30 * * * *", timezone: "UTC" },
+      {},
+    );
+    expect(second.enabled).toBe(true);
+  });
+
+  it("rejects updating a trigger to become a duplicate of another enabled schedule trigger", async () => {
+    const { routine, svc } = await seedFixture();
+    const { trigger: first } = await svc.createTrigger(
+      routine.id,
+      { kind: "schedule", label: "Every 30 min watchdog", cronExpression: "*/30 * * * *", timezone: "UTC" },
+      {},
+    );
+    const { trigger: second } = await svc.createTrigger(
+      routine.id,
+      { kind: "schedule", label: "Hourly watchdog", cronExpression: "0 * * * *", timezone: "UTC" },
+      {},
+    );
+
+    // Try to change the second trigger to match the first
+    await expect(
+      svc.updateTrigger(
+        second.id,
+        { label: "Every 30 min watchdog", cronExpression: "*/30 * * * *" },
+        {},
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("allows updating a trigger label when no duplicate would result", async () => {
+    const { routine, svc } = await seedFixture();
+    const { trigger: first } = await svc.createTrigger(
+      routine.id,
+      { kind: "schedule", label: "Every 30 min watchdog", cronExpression: "*/30 * * * *", timezone: "UTC" },
+      {},
+    );
+
+    const { trigger: updated } = await svc.updateTrigger(
+      first.id,
+      { label: "Renamed watchdog" },
+      {},
+    );
+    expect(updated.label).toBe("Renamed watchdog");
+  });
+
+  it("rejects re-enabling a disabled trigger when an enabled one with the same key already exists", async () => {
+    const { routine, svc } = await seedFixture();
+    // Create an enabled trigger
+    const { trigger: enabled } = await svc.createTrigger(
+      routine.id,
+      { kind: "schedule", label: "Every 30 min watchdog", cronExpression: "*/30 * * * *", timezone: "UTC" },
+      {},
+    );
+    expect(enabled.enabled).toBe(true);
+
+    // Create a disabled trigger with the same key
+    const { trigger: disabled } = await svc.createTrigger(
+      routine.id,
+      { kind: "schedule", label: "Every 30 min watchdog", cronExpression: "*/30 * * * *", timezone: "UTC", enabled: false },
+      {},
+    );
+    expect(disabled.enabled).toBe(false);
+
+    // Try to re-enable the disabled trigger — should be rejected because the enabled one exists
+    await expect(
+      svc.updateTrigger(disabled.id, { enabled: true }, {}),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("allows two schedule triggers with same label when cronExpression differs", async () => {
+    const { routine, svc } = await seedFixture();
+    const { trigger: first } = await svc.createTrigger(
+      routine.id,
+      { kind: "schedule", label: "Watchdog", cronExpression: "*/30 * * * *", timezone: "UTC" },
+      {},
+    );
+    const { trigger: second } = await svc.createTrigger(
+      routine.id,
+      { kind: "schedule", label: "Watchdog", cronExpression: "0 * * * *", timezone: "UTC" },
+      {},
+    );
+    expect(first.cronExpression).toBe("*/30 * * * *");
+    expect(second.cronExpression).toBe("0 * * * *");
+  });
+
+  it("rejects creating a second enabled schedule trigger when only the timezone differs", async () => {
+    const { routine, svc } = await seedFixture();
+    await svc.createTrigger(
+      routine.id,
+      { kind: "schedule", label: "Daily backup", cronExpression: "0 2 * * *", timezone: "America/New_York" },
+      {},
+    );
+
+    await expect(
+      svc.createTrigger(
+        routine.id,
+        { kind: "schedule", label: "Daily backup", cronExpression: "0 2 * * *", timezone: "UTC" },
+        {},
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("uses target-window idempotency keys for catch-up iterations", async () => {
+    const { companyId, agentId, projectId, svc } = await seedFixture();
+    const weeklyRoutine = await svc.create(
+      companyId,
+      {
+        projectId,
+        goalId: null,
+        parentIssueId: null,
+        title: "weekly audit for {{date}}",
+        description: "Audit report for week of {{date}}",
+        assigneeAgentId: agentId,
+        priority: "medium",
+        status: "active",
+        concurrencyPolicy: "coalesce_if_active",
+        catchUpPolicy: "enqueue_missed_with_cap",
+      },
+      {},
+    );
+
+    const { trigger } = await svc.createTrigger(weeklyRoutine.id, {
+      kind: "schedule",
+      label: "Weekly audit",
+      cronExpression: "0 9 * * 1",
+      timezone: "UTC",
+    }, { agentId });
+
+    // Simulate the scheduler waking up with a backlog of 3 missed weeks
+    // (e.g. the scheduler was down for 3 weeks and is now catching up).
+    // tickScheduledTriggers processes each missed tick sequentially.
+    const missedMonday = new Date("2026-06-01T09:00:00.000Z");
+    await db
+      .update(routineTriggers)
+      .set({ nextRunAt: missedMonday })
+      .where(eq(routineTriggers.id, trigger.id));
+
+    // Advance the scheduler clock to "now" (well past the 3 missed weeks)
+    const now = new Date("2026-06-15T09:00:00.000Z");
+    const result = await svc.tickScheduledTriggers(now);
+
+    expect(result.triggered).toBe(3);
+
+    const createdIssues = await db
+      .select({ id: issues.id, title: issues.title, description: issues.description })
+      .from(issues)
+      .where(eq(issues.originId, weeklyRoutine.id));
+    expect(createdIssues.map((issue) => issue.title).sort()).toEqual([
+      "weekly audit for 2026-06-01",
+      "weekly audit for 2026-06-08",
+      "weekly audit for 2026-06-15",
+    ]);
+    expect(createdIssues.map((issue) => issue.description).sort()).toEqual([
+      "Audit report for week of 2026-06-01",
+      "Audit report for week of 2026-06-08",
+      "Audit report for week of 2026-06-15",
+    ]);
+
+    const runs = await db
+      .select({
+        id: routineRuns.id,
+        status: routineRuns.status,
+        idempotencyKey: routineRuns.idempotencyKey,
+        triggerPayload: routineRuns.triggerPayload,
+      })
+      .from(routineRuns)
+      .where(eq(routineRuns.routineId, weeklyRoutine.id));
+    expect(runs).toHaveLength(3);
+    expect(runs.map((r) => r.status)).toEqual(["issue_created", "issue_created", "issue_created"]);
+    expect(runs.map((r) => r.idempotencyKey).sort()).toEqual([
+      `schedule:${trigger.id}:2026-06-01T09:00:00.000Z`,
+      `schedule:${trigger.id}:2026-06-08T09:00:00.000Z`,
+      `schedule:${trigger.id}:2026-06-15T09:00:00.000Z`,
+    ]);
+    expect(
+      runs
+        .map((r) => (r.triggerPayload as { schedule?: { scheduledDate?: string } } | null)?.schedule?.scheduledDate)
+        .sort(),
+    ).toEqual(["2026-06-01", "2026-06-08", "2026-06-15"]);
+  }, 20_000);
+
+  it("coalesces a scheduled retry into a recent completed issue with the same fingerprint", async () => {
+    const { companyId, agentId, projectId, svc } = await seedFixture();
+    const weeklyRoutine = await svc.create(
+      companyId,
+      {
+        projectId,
+        goalId: null,
+        parentIssueId: null,
+        title: "weekly audit",
+        description: "Complete weekly audit body",
+        assigneeAgentId: agentId,
+        priority: "medium",
+        status: "active",
+        concurrencyPolicy: "coalesce_if_active",
+        catchUpPolicy: "skip_missed",
+      },
+      {},
+    );
+
+    const { trigger } = await svc.createTrigger(weeklyRoutine.id, {
+      kind: "schedule",
+      label: "Weekly audit",
+      cronExpression: "0 9 * * 1",
+      timezone: "UTC",
+    }, { agentId });
+    const fireTime = new Date("2026-06-15T09:00:00.000Z");
+    await db
+      .update(routineTriggers)
+      .set({ nextRunAt: fireTime })
+      .where(eq(routineTriggers.id, trigger.id));
+
+    const firstResult = await svc.tickScheduledTriggers(new Date("2026-06-15T09:01:00.000Z"));
+    expect(firstResult.triggered).toBe(1);
+
+    const [first] = await db
+      .select({
+        id: routineRuns.id,
+        status: routineRuns.status,
+        linkedIssueId: routineRuns.linkedIssueId,
+        idempotencyKey: routineRuns.idempotencyKey,
+      })
+      .from(routineRuns)
+      .where(eq(routineRuns.routineId, weeklyRoutine.id));
+    expect(first).toEqual(expect.objectContaining({
+      status: "issue_created",
+      idempotencyKey: `schedule:${trigger.id}:2026-06-15T09:00:00.000Z`,
+    }));
+    if (!first) throw new Error("Expected initial scheduled routine run");
+    expect(first.linkedIssueId).toBeTruthy();
+
+    // Emulate a historical scheduled run created before schedule-window
+    // idempotency keys existed. The same-window retry must still find the issue
+    // by dispatch fingerprint instead of creating a duplicate.
+    await db.update(routineRuns).set({ idempotencyKey: null }).where(eq(routineRuns.id, first.id));
+
+    const [firstIssue] = await db
+      .select({ id: issues.id, executionRunId: issues.executionRunId })
+      .from(issues)
+      .where(eq(issues.id, first.linkedIssueId!));
+    if (firstIssue?.executionRunId) {
+      await db
+        .update(heartbeatRuns)
+        .set({ status: "succeeded", finishedAt: new Date("2026-06-15T09:05:00.000Z") })
+        .where(eq(heartbeatRuns.id, firstIssue.executionRunId));
+    }
+    await db
+      .update(issues)
+      .set({
+        status: "done",
+        completedAt: new Date("2026-06-15T09:06:00.000Z"),
+        updatedAt: new Date("2026-06-15T09:06:00.000Z"),
+      })
+      .where(eq(issues.id, first.linkedIssueId!));
+    await db
+      .update(routineTriggers)
+      .set({ nextRunAt: fireTime })
+      .where(eq(routineTriggers.id, trigger.id));
+
+    const retryResult = await svc.tickScheduledTriggers(new Date("2026-06-15T09:02:00.000Z"));
+    expect(retryResult.triggered).toBe(1);
+
+    const runs = await db
+      .select({
+        id: routineRuns.id,
+        status: routineRuns.status,
+        linkedIssueId: routineRuns.linkedIssueId,
+        coalescedIntoRunId: routineRuns.coalescedIntoRunId,
+      })
+      .from(routineRuns)
+      .where(eq(routineRuns.routineId, weeklyRoutine.id));
+    expect(runs).toHaveLength(2);
+    const retry = runs.find((run) => run.status === "coalesced");
+    expect(retry).toEqual(expect.objectContaining({
+      linkedIssueId: first.linkedIssueId,
+      coalescedIntoRunId: first.id,
+    }));
+
+    const createdIssues = await db
+      .select({ id: issues.id, title: issues.title, description: issues.description })
+      .from(issues)
+      .where(eq(issues.originId, weeklyRoutine.id));
+    expect(createdIssues).toEqual([
+      expect.objectContaining({
+        id: first.linkedIssueId,
+        title: "weekly audit",
+        description: "Complete weekly audit body",
+      }),
+    ]);
+  }, 20_000);
+
+  it("suppresses duplicate issues from concurrent scheduler wakes for the same tick", async () => {
+    const { companyId, agentId, projectId, svc } = await seedFixture();
+    const routine = await svc.create(
+      companyId,
+      {
+        projectId,
+        goalId: null,
+        parentIssueId: null,
+        title: "daily check {{date}}",
+        description: "Daily check for {{date}}",
+        assigneeAgentId: agentId,
+        priority: "medium",
+        status: "active",
+        concurrencyPolicy: "coalesce_if_active",
+        catchUpPolicy: "enqueue_missed_with_cap",
+      },
+      {},
+    );
+
+    const { trigger } = await svc.createTrigger(routine.id, {
+      kind: "schedule",
+      label: "Daily",
+      cronExpression: "0 8 * * *",
+      timezone: "UTC",
+    }, { agentId });
+
+    // Set the trigger's nextRunAt to "now" so it fires
+    const fireTime = new Date("2026-06-10T08:00:00.000Z");
+    await db
+      .update(routineTriggers)
+      .set({ nextRunAt: fireTime })
+      .where(eq(routineTriggers.id, trigger.id));
+
+    // Fire tickScheduledTriggers twice in rapid succession with the same clock.
+    // Without the idempotency key, both would create separate issues.
+    // With it, only one issue is created.
+    await svc.tickScheduledTriggers(new Date("2026-06-10T08:01:00.000Z"));
+    await svc.tickScheduledTriggers(new Date("2026-06-10T08:02:00.000Z"));
+
+    const createdIssues = await db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(eq(issues.originId, routine.id));
+    expect(createdIssues).toHaveLength(1);
+  });
+
+  it("fails closed without creating an execution issue when the routine description is null", async () => {
+    const { companyId, agentId, projectId, svc } = await seedFixture();
+    const noDescRoutine = await svc.create(
+      companyId,
+      {
+        projectId,
+        goalId: null,
+        parentIssueId: null,
+        title: "audit without body",
+        description: null,
+        assigneeAgentId: agentId,
+        priority: "medium",
+        status: "active",
+        concurrencyPolicy: "coalesce_if_active",
+        catchUpPolicy: "skip_missed",
+      },
+      {},
+    );
+
+    const { trigger } = await svc.createTrigger(noDescRoutine.id, {
+      kind: "schedule",
+      label: "Daily",
+      cronExpression: "0 9 * * *",
+      timezone: "UTC",
+    }, { agentId });
+
+    // Advance past the trigger time
+    const now = new Date("2026-06-15T09:00:00.000Z");
+    await db
+      .update(routineTriggers)
+      .set({ nextRunAt: new Date("2026-06-14T09:00:00.000Z") })
+      .where(eq(routineTriggers.id, trigger.id));
+
+    const result = await svc.tickScheduledTriggers(now);
+    expect(result.triggered).toBe(1);
+
+    const runs = await db
+      .select({ status: routineRuns.status, failureReason: routineRuns.failureReason, linkedIssueId: routineRuns.linkedIssueId })
+      .from(routineRuns)
+      .where(eq(routineRuns.routineId, noDescRoutine.id));
+    expect(runs).toEqual([
+      expect.objectContaining({
+        status: "failed",
+        linkedIssueId: null,
+        failureReason: expect.stringMatching(/description is null/i),
+      }),
+    ]);
+    await expect(db.select().from(issues).where(eq(issues.originId, noDescRoutine.id))).resolves.toHaveLength(0);
+  }, 20_000);
 });
