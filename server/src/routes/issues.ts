@@ -1593,6 +1593,42 @@ export function issueRoutes(
     );
   }
 
+  async function assertAgentCanSetBlocked(input: {
+    existing: { id: string; companyId: string; status: string; blockedBy?: Array<{ id: string }> };
+    updateFields: Record<string, unknown>;
+    actorType: string;
+  }) {
+    const nextStatus = typeof input.updateFields.status === "string"
+      ? input.updateFields.status
+      : input.existing.status;
+
+    // Only enforce for agent-initiated transitions to blocked status
+    if (input.actorType !== "agent" || nextStatus !== "blocked" || input.existing.status === "blocked") {
+      return;
+    }
+
+    // Check A: empty blockers
+    const incoming = (input.updateFields.blockedByIssueIds as string[] | undefined) ?? [];
+    const prior = (input.existing.blockedBy ?? []).map((b) => b.id);
+    const effective = incoming.length > 0 ? incoming : prior;
+
+    if (effective.length === 0) {
+      throw unprocessable(
+        "blocked requires blockedByIssueIds — specify the blocker or escalate via comment",
+        { code: "false_blocker_empty" },
+      );
+    }
+
+    // Check B: all-resolved blockers
+    const unresolved = await svc.listUnresolvedBlockerIssueIds(input.existing.companyId, effective, db);
+    if (unresolved.length === 0) {
+      throw unprocessable(
+        "Cannot block: all listed blockers are already resolved. Continue the work or identify the real blocker.",
+        { code: "false_blocker_resolved" },
+      );
+    }
+  }
+
   async function assertAgentInReviewReviewPath(input: {
     existing: {
       id: string;
@@ -1628,7 +1664,13 @@ export function issueRoutes(
     })) return;
 
     const interactions = await issueThreadInteractionService(db).listForIssue(input.existing.id);
-    if (interactions.some((interaction) => interaction.status === "pending")) return;
+    const validReviewInteractions = interactions.filter(
+      (interaction) =>
+        interaction.status === "pending" &&
+        interaction.continuationPolicy &&
+        ["wake_assignee", "wake_assignee_on_accept"].includes(String(interaction.continuationPolicy)),
+    );
+    if (validReviewInteractions.length > 0) return;
 
     const approvals = await issueApprovalsSvc.listApprovalsForIssue(input.existing.id);
     if (approvals.some((approval) => ACTIVE_REVIEW_APPROVAL_STATUSES.has(String(approval.status)))) return;
@@ -5059,6 +5101,12 @@ export function issueRoutes(
     }
 
     await assertAgentInReviewReviewPath({
+      existing,
+      updateFields,
+      actorType: req.actor.type,
+    });
+
+    await assertAgentCanSetBlocked({
       existing,
       updateFields,
       actorType: req.actor.type,
