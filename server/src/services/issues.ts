@@ -26,6 +26,7 @@ import {
   issueDocuments,
   issueReadStates,
   issueThreadInteractions,
+  issueWorkProducts,
   issues,
   labels,
   projectWorkspaces,
@@ -51,6 +52,7 @@ import {
   clampIssueRequestDepth,
   extractAgentMentionIds,
   extractProjectMentionIds,
+  ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY,
   issueCommentAuthorTypeSchema,
   issueCommentMetadataSchema,
   issueCommentPresentationSchema,
@@ -81,6 +83,13 @@ import {
   issueTreeControlService,
   type ActiveIssueTreePauseHoldGate,
 } from "./issue-tree-control.js";
+import {
+  assertFalseDoneGuard,
+  falseDoneGuardMode,
+  falseDoneJudgeModel,
+  isFalseDoneCanaryScope,
+  type FalseDoneJudgeEvidence,
+} from "./false-done-guard.js";
 import {
   parseIssueGraphLivenessIncidentKey,
   RECOVERY_ORIGIN_KINDS,
@@ -3116,6 +3125,112 @@ async function countBlockedInboxIssues(dbOrTx: any, companyId: string, filters?:
   }, 0);
 }
 
+function latestDate(...values: Array<Date | null | undefined>): Date | null {
+  let latest: Date | null = null;
+  for (const value of values) {
+    if (!(value instanceof Date)) continue;
+    if (!latest || value > latest) latest = value;
+  }
+  return latest;
+}
+
+async function collectFalseDoneJudgeEvidence(
+  dbOrTx: any,
+  companyId: string,
+  issueId: string,
+  issueTitle: string,
+  issueDescription: string,
+  issueIdentifier: string,
+  pendingCloseCommentCount = 0,
+  pendingCloseCommentBody?: string | null,
+): Promise<FalseDoneJudgeEvidence> {
+  const [commentStats] = await dbOrTx
+    .select({
+      count: sql<number>`count(*)::int`,
+      latestAt: sql<Date | null>`max(${issueComments.createdAt})`,
+    })
+    .from(issueComments)
+    .where(and(eq(issueComments.companyId, companyId), eq(issueComments.issueId, issueId)));
+
+  const [documentStats] = await dbOrTx
+    .select({
+      count: sql<number>`count(*)::int`,
+      planCount: sql<number>`count(*) filter (where ${issueDocuments.key} = 'plan')::int`,
+      latestAt: sql<Date | null>`max(${documentRevisions.createdAt})`,
+    })
+    .from(documentRevisions)
+    .innerJoin(issueDocuments, eq(documentRevisions.documentId, issueDocuments.documentId))
+    .where(
+      and(
+        eq(documentRevisions.companyId, companyId),
+        eq(issueDocuments.companyId, companyId),
+        eq(issueDocuments.issueId, issueId),
+        sql`${issueDocuments.key} != ${ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY}`,
+      ),
+    );
+
+  const [workProductStats] = await dbOrTx
+    .select({
+      count: sql<number>`count(*)::int`,
+      latestAt: sql<Date | null>`max(${issueWorkProducts.createdAt})`,
+    })
+    .from(issueWorkProducts)
+    .where(and(eq(issueWorkProducts.companyId, companyId), eq(issueWorkProducts.issueId, issueId)));
+
+  const [workspaceOperationStats] = await dbOrTx
+    .select({
+      count: sql<number>`count(*)::int`,
+      latestAt: sql<Date | null>`max(${workspaceOperations.startedAt})`,
+    })
+    .from(workspaceOperations)
+    .where(and(eq(workspaceOperations.companyId, companyId), eq(workspaceOperations.issueId, issueId)));
+
+  const [activityStats] = await dbOrTx
+    .select({
+      count: sql<number>`count(*)::int`,
+      latestAt: sql<Date | null>`max(${activityLog.createdAt})`,
+    })
+    .from(activityLog)
+    .where(
+      and(
+        eq(activityLog.companyId, companyId),
+        eq(activityLog.entityType, "issue"),
+        eq(activityLog.entityId, issueId),
+        sql`${activityLog.action} NOT IN (${sql.join(
+          ISSUE_LOCAL_INBOX_ACTIVITY_ACTIONS.map((action) => sql`${action}`),
+          sql`, `,
+        )})`,
+      ),
+    );
+
+  const normalizedPendingCloseCommentCount = Math.max(0, Math.floor(pendingCloseCommentCount));
+  const latestPendingCloseCommentAt =
+    normalizedPendingCloseCommentCount > 0 && pendingCloseCommentBody ? new Date() : null;
+
+  return {
+    issueTitle,
+    issueDescription,
+    issueIdentifier,
+    issueCommentsCreated: Number(commentStats?.count ?? 0) + normalizedPendingCloseCommentCount,
+    documentRevisionsCreated: Number(documentStats?.count ?? 0),
+    planDocumentRevisionsCreated: Number(documentStats?.planCount ?? 0),
+    workProductsCreated: Number(workProductStats?.count ?? 0),
+    workspaceOperationsCreated: Number(workspaceOperationStats?.count ?? 0),
+    activityEventsCreated: Number(activityStats?.count ?? 0),
+    toolOrActionEventsCreated: 0,
+    latestEvidenceAt: latestDate(
+      commentStats?.latestAt ?? null,
+      documentStats?.latestAt ?? null,
+      workProductStats?.latestAt ?? null,
+      workspaceOperationStats?.latestAt ?? null,
+      activityStats?.latestAt ?? null,
+      latestPendingCloseCommentAt,
+    )?.toISOString() ?? null,
+    pendingCloseCommentCount: normalizedPendingCloseCommentCount,
+    pendingCloseCommentBody: pendingCloseCommentBody?.trim() ?? "",
+  };
+}
+
 export function issueService(db: Db) {
   const instanceSettings = instanceSettingsService(db);
   const treeControlSvc = issueTreeControlService(db);
@@ -5108,6 +5223,8 @@ export function issueService(db: Db) {
         blockedByIssueIds?: string[];
         actorAgentId?: string | null;
         actorUserId?: string | null;
+        pendingCloseCommentCount?: number;
+        pendingCloseCommentBody?: string | null;
       },
       dbOrTx: any = db,
     ) => {
@@ -5123,6 +5240,8 @@ export function issueService(db: Db) {
         blockedByIssueIds,
         actorAgentId,
         actorUserId,
+        pendingCloseCommentCount,
+        pendingCloseCommentBody,
         ...issueData
       } = data;
       const isolatedWorkspacesEnabled = (await instanceSettings.getExperimental()).enableIsolatedWorkspaces;
@@ -5209,6 +5328,49 @@ export function issueService(db: Db) {
       if (nextExecutionWorkspaceId) {
         if (!validatedExecutionWorkspace) {
           await assertValidExecutionWorkspace(existing.companyId, nextProjectId, nextExecutionWorkspaceId);
+        }
+      }
+
+      if (issueData.status === "done") {
+        const guardMode = falseDoneGuardMode();
+        if (guardMode !== "off" && existing.status !== "done") {
+          const issueTitle = typeof issueData.title === "string" ? issueData.title : existing.title;
+          const issueDescription =
+            issueData.description !== undefined
+              ? (issueData.description as string | null)
+              : existing.description;
+          const guardInput = {
+            issueId: existing.id,
+            issueIdentifier: existing.identifier,
+            issueTitle,
+            issueDescription: issueDescription ?? "",
+            evidence: await collectFalseDoneJudgeEvidence(
+              dbOrTx,
+              existing.companyId,
+              existing.id,
+              issueTitle,
+              issueDescription ?? "",
+              existing.identifier,
+              pendingCloseCommentCount ?? 0,
+              pendingCloseCommentBody ?? null,
+            ),
+            mode: guardMode,
+            inCanary: isFalseDoneCanaryScope({
+              originKind: issueData.originKind ?? existing.originKind,
+              executionPolicy:
+                issueData.executionPolicy !== undefined ? issueData.executionPolicy : existing.executionPolicy,
+            }),
+            judgeModelId: falseDoneJudgeModel(),
+            judgeApiKey: process.env.PAPERCLIP_API_KEY?.trim() ?? "",
+            judgeApiBase: process.env.PAPERCLIP_API_URL?.trim() ?? "",
+          } satisfies Parameters<typeof assertFalseDoneGuard>[0];
+          const guardResult = await assertFalseDoneGuard(guardInput);
+          if (!guardResult.allowed) {
+            throw unprocessable("Issue cannot be marked done without sufficient evidence", {
+              reason: guardResult.reason ?? "false_done_guard_rejected",
+              missing: guardResult.missing ?? [],
+            });
+          }
         }
       }
 
