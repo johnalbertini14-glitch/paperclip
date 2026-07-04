@@ -1,6 +1,10 @@
+import { randomUUID } from "node:crypto";
+import { once } from "node:events";
+import { spawn } from "node:child_process";
 import { Router, type Request } from "express";
 import type { Db } from "@paperclipai/db";
 import { AGENT_ICON_NAMES } from "@paperclipai/shared";
+import { z, ZodError } from "zod";
 import { forbidden } from "../errors.js";
 import { listServerAdapters } from "../adapters/index.js";
 import { hermesGatewayAgentConfigurationDoc } from "../adapters/hermes-gateway-doc.js";
@@ -13,6 +17,115 @@ const pluginOnlyAdapterDocs = new Map<string, string>([
 function hasCreatePermission(agent: { role: string; permissions: Record<string, unknown> | null | undefined }) {
   if (!agent.permissions || typeof agent.permissions !== "object") return false;
   return Boolean((agent.permissions as Record<string, unknown>).canCreateAgents);
+}
+
+const chatCompletionMessageSchema = z.object({
+  role: z.enum(["system", "user", "assistant", "tool"]),
+  content: z.union([z.string(), z.array(z.unknown())]),
+}).passthrough();
+
+const chatCompletionRequestSchema = z.object({
+  model: z.string().trim().min(1),
+  messages: z.array(chatCompletionMessageSchema).min(1),
+  max_tokens: z.number().int().positive().optional(),
+  temperature: z.number().optional(),
+  top_p: z.number().optional(),
+  stop: z.union([z.string(), z.array(z.string())]).optional(),
+}).passthrough();
+
+function stringifyMessageContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) return JSON.stringify(content);
+  if (content == null) return "";
+  return String(content);
+}
+
+function buildCodexPrompt(messages: Array<{ role: string; content: unknown }>): string {
+  const transcript = messages
+    .map((message) => `${message.role.toUpperCase()}:\n${stringifyMessageContent(message.content)}`)
+    .join("\n\n");
+  return [
+    "You are an OpenAI-compatible chat completion backend for Paperclip.",
+    "Answer the latest user request directly.",
+    "If the request asks for JSON, return only valid JSON.",
+    "",
+    transcript,
+  ].join("\n");
+}
+
+async function runCodexChatCompletion(input: {
+  model: string;
+  messages: Array<{ role: string; content: unknown }>;
+}): Promise<{ content: string; promptTokens: number; completionTokens: number }> {
+  const here = new URL(".", import.meta.url);
+  const repoRoot = new URL("../../../", here).pathname;
+  const proc = spawn("codex", ["exec", "--json", "--model", input.model, "-"], {
+    cwd: repoRoot,
+    env: process.env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  const stdoutChunks: string[] = [];
+  const stderrChunks: string[] = [];
+  const prompt = buildCodexPrompt(input.messages);
+
+  proc.stdin.write(prompt);
+  proc.stdin.end();
+
+  proc.stdout.on("data", (chunk: Buffer) => {
+    stdoutChunks.push(chunk.toString("utf8"));
+  });
+  proc.stderr.on("data", (chunk: Buffer) => {
+    stderrChunks.push(chunk.toString("utf8"));
+  });
+
+  const closeArgs = await Promise.race([
+    once(proc, "close"),
+    once(proc, "error").then(([err]) => {
+      throw err;
+    }),
+  ]) as [number | null, NodeJS.Signals | null];
+
+  const exitCode = closeArgs[0];
+  const stdout = stdoutChunks.join("");
+  const stderr = stderrChunks.join("");
+  if (exitCode !== 0) {
+    throw new Error(
+      stderr.trim() || `codex exec exited with code ${exitCode ?? "unknown"}`,
+    );
+  }
+
+  let content = "";
+  let promptTokens = 0;
+  let completionTokens = 0;
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    try {
+      const event = JSON.parse(line) as { type?: string; item?: { type?: string; text?: unknown }; usage?: Record<string, unknown> };
+      if (event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string") {
+        content = event.item.text.trim();
+      } else if (event.type === "turn.completed" && event.usage) {
+        const usage = event.usage;
+        const inputTokens = Number(usage.input_tokens ?? 0);
+        const outputTokens = Number(usage.output_tokens ?? 0);
+        if (Number.isFinite(inputTokens)) promptTokens = Math.max(0, Math.floor(inputTokens));
+        if (Number.isFinite(outputTokens)) completionTokens = Math.max(0, Math.floor(outputTokens));
+      }
+    } catch {
+      if (!content) content = line;
+    }
+  }
+
+  if (!content) {
+    const fallback = stdout.trim();
+    if (fallback) content = fallback.split(/\r?\n/).pop()!.trim();
+  }
+  if (!content) {
+    throw new Error(stderr.trim() || "codex exec returned no assistant message");
+  }
+
+  return { content, promptTokens, completionTokens };
 }
 
 export function llmRoutes(db: Db) {
@@ -29,6 +142,51 @@ export function llmRoutes(db: Db) {
       throw forbidden("Missing permission to read agent configuration reflection");
     }
   }
+
+  function assertCanUseChatGateway(req: Request) {
+    if (req.actor.type === "none") {
+      throw forbidden("Authenticated Paperclip access required");
+    }
+  }
+
+  router.post("/chat/completions", async (req, res, next) => {
+    try {
+      assertCanUseChatGateway(req);
+      const body = chatCompletionRequestSchema.parse(req.body);
+      const completion = await runCodexChatCompletion({
+        model: body.model,
+        messages: body.messages,
+      });
+
+      res.json({
+        id: `chatcmpl-${randomUUID()}`,
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model: body.model,
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: completion.content },
+            finish_reason: "stop",
+          },
+        ],
+        usage: {
+          prompt_tokens: completion.promptTokens,
+          completion_tokens: completion.completionTokens,
+          total_tokens: completion.promptTokens + completion.completionTokens,
+        },
+      });
+    } catch (err) {
+      if (err instanceof ZodError) {
+        res.status(400).json({
+          error: "Invalid chat completion request",
+          details: err.issues.map((issue) => issue.message),
+        });
+        return;
+      }
+      next(err);
+    }
+  });
 
   router.get("/llms/agent-configuration.txt", async (req, res) => {
     await assertCanRead(req);
