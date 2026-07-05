@@ -140,13 +140,8 @@ describe("llm routes", () => {
     });
     expect(mockSpawn).toHaveBeenCalledWith(
       "codex",
-      expect.arrayContaining(["exec", "--json", "--model", "gpt-5.4"]),
+      ["exec", "--json", "--model", "gpt-5.4", "-"],
       expect.objectContaining({ cwd: expect.stringContaining("/paperclip/repos/paperclip") }),
-    );
-    expect(mockSpawn).toHaveBeenCalledWith(
-      "codex",
-      expect.arrayContaining(["--max-tokens", "64", "--temperature", "0"]),
-      expect.any(Object),
     );
     expect(capturedPrompt).toContain("Return JSON only.");
     expect(capturedPrompt).toContain("Judge the run.");
@@ -171,7 +166,7 @@ describe("llm routes", () => {
     expect(res.body.detail).toContain("gpt-5.4");
   });
 
-  it("forwards max_tokens, temperature, top_p, and stop to codex", async () => {
+  it("does not forward max_tokens, temperature, top_p, or stop as CLI flags (codex exec does not support them)", async () => {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     const stdin = new PassThrough();
@@ -215,25 +210,13 @@ describe("llm routes", () => {
     });
 
     expect(res.status).toBe(200);
-    expect(mockSpawn).toHaveBeenCalledWith(
-      "codex",
-      [
-        "exec",
-        "--json",
-        "--model",
-        "gpt-5.4",
-        "--max-tokens",
-        "128",
-        "--temperature",
-        "0.7",
-        "--top-p",
-        "0.9",
-        "--stop",
-        "TERMINATE",
-        "-",
-      ],
-      expect.any(Object),
-    );
+    const spawnArgs = mockSpawn.mock.calls[0]?.[1] as string[];
+    expect(spawnArgs).toEqual(["exec", "--json", "--model", "gpt-5.4", "-"]);
+    // Assert that the unsupported flags are NOT present as a regression guard
+    expect(spawnArgs).not.toContain("--max-tokens");
+    expect(spawnArgs).not.toContain("--temperature");
+    expect(spawnArgs).not.toContain("--top-p");
+    expect(spawnArgs).not.toContain("--stop");
   });
 
   it("registers a SIGKILL abort handler on the spawned process", async () => {

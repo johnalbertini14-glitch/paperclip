@@ -81,23 +81,7 @@ async function runCodexChatCompletion(input: {
   const here = new URL(".", import.meta.url);
   const repoRoot = new URL("../../../", here).pathname;
 
-  const codexArgs = ["exec", "--json", "--model", input.model];
-  if (input.controls?.max_tokens !== undefined) {
-    codexArgs.push("--max-tokens", String(input.controls.max_tokens));
-  }
-  if (input.controls?.temperature !== undefined) {
-    codexArgs.push("--temperature", String(input.controls.temperature));
-  }
-  if (input.controls?.top_p !== undefined) {
-    codexArgs.push("--top-p", String(input.controls.top_p));
-  }
-  if (input.controls?.stop !== undefined) {
-    const stops = Array.isArray(input.controls.stop) ? input.controls.stop : [input.controls.stop];
-    for (const s of stops) {
-      codexArgs.push("--stop", s);
-    }
-  }
-  codexArgs.push("-");
+  const codexArgs = ["exec", "--json", "--model", input.model, "-"];
 
   // Pass the AbortSignal so Node.js can auto-SIGKILL the child when the
   // signal is aborted.  Omit the key when no signal is provided so spawn
