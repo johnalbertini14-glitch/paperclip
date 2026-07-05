@@ -4,6 +4,13 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// Reach into the module-level rate-limit map from the route file. The route
+// is imported inside createApp() via vi.importActual so we cannot re-export;
+// instead we re-trigger a fresh import per test (vi.resetModules in
+// beforeEach) and clear the in-memory Map by issuing many requests after the
+// window expires. Simpler: each rate-limit test uses a unique actor key so
+// tests don't bleed into each other.
+
 const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
 }));
@@ -377,5 +384,307 @@ describe("llm routes — static docs", () => {
     expect(res.text).toContain("tailnet-name.ts.net:8642");
     expect(res.text).toContain("http://host.docker.internal:8642");
     expect(res.text).toContain("https://hermes-gateway.example");
+  });
+});
+
+describe("llm routes — chat gateway auth and failure paths", () => {
+  // Helper: build a successful proc that emits a valid agent_message JSON
+  // event on stdout and closes with exit 0.
+  function makeSuccessProc(stdoutPayload: object, usage = { input_tokens: 1, output_tokens: 1 }) {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const stdin = new PassThrough();
+    const proc = new EventEmitter() as EventEmitter & {
+      stdin: PassThrough;
+      stdout: PassThrough;
+      stderr: PassThrough;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    proc.stdin = stdin;
+    proc.stdout = stdout;
+    proc.stderr = stderr;
+    proc.kill = vi.fn();
+    setImmediate(() => {
+      stdout.write(
+        `{"type":"item.completed","item":{"type":"agent_message","text":${JSON.stringify(JSON.stringify(stdoutPayload))}}}\n`,
+      );
+      stdout.write(`{"type":"turn.completed","usage":{"input_tokens":${usage.input_tokens},"output_tokens":${usage.output_tokens}}}\n`);
+      stdout.end();
+      stderr.end();
+      proc.emit("close", 0, null);
+    });
+    return proc;
+  }
+
+  it("rejects unauthenticated requests with 403", async () => {
+    const app = await createApp({ type: "none", source: "none" });
+
+    const res = await request(app)
+      .post("/api/chat/completions")
+      .send({
+        model: "gpt-5.4",
+        messages: [{ role: "user", content: "hello" }],
+      });
+
+    expect(res.status).toBe(403);
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects a board actor without isInstanceAdmin with 403", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "non-admin-board",
+      companyIds: ["company-1"],
+      source: "session",
+      isInstanceAdmin: false,
+    });
+
+    const res = await request(app)
+      .post("/api/chat/completions")
+      .send({
+        model: "gpt-5.4",
+        messages: [{ role: "user", content: "hello" }],
+      });
+
+    expect(res.status).toBe(403);
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects an agent actor (chat gateway is instance-admin only)", async () => {
+    // Even an agent with agentId set is forbidden — the comment on the route
+    // documents that the false-done-guard judge (server-to-server) is the
+    // only intended caller, and the judge uses a board actor with admin.
+    const app = await createApp({
+      type: "agent",
+      agentId: "agent-1",
+      companyId: "company-1",
+      source: "agent_key",
+    });
+
+    const res = await request(app)
+      .post("/api/chat/completions")
+      .send({
+        model: "gpt-5.4",
+        messages: [{ role: "user", content: "hello" }],
+      });
+
+    expect(res.status).toBe(403);
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown field in the request body (strict schema)", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "board-user",
+      companyIds: ["company-1"],
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+
+    const res = await request(app)
+      .post("/api/chat/completions")
+      .send({
+        model: "gpt-5.4",
+        messages: [{ role: "user", content: "hello" }],
+        // Unknown field — should be rejected by the strict schema with 400.
+        unknown_field: "nope",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("Invalid chat completion request");
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("returns 500 when codex exits non-zero", async () => {
+    mockSpawn.mockImplementationOnce(() => {
+      const proc = Object.assign(new EventEmitter(), {
+        kill: vi.fn(),
+        stdin: new PassThrough(),
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+      });
+      queueMicrotask(() => {
+        proc.stderr.write("model not found\n");
+        proc.stderr.end();
+        proc.stdout.end();
+        proc.emit("close", 1, null);
+      });
+      return proc as unknown as import("node:child_process").ChildProcess;
+    });
+
+    const app = await createApp({
+      type: "board",
+      userId: "board-user-500-nz",
+      companyIds: ["company-1"],
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+
+    const res = await request(app)
+      .post("/api/chat/completions")
+      .send({
+        model: "gpt-5.4",
+        messages: [{ role: "user", content: "judge" }],
+      });
+
+    expect(res.status).toBe(500);
+  });
+
+  it("falls back to the raw line and still returns 200 when codex emits non-JSON", async () => {
+    // Codex is documented to emit JSON events, but if a future regression
+    // makes it emit plain text on stdout, the route should not crash — it
+    // falls back to treating the line as plain assistant content. The logger
+    // call inside the catch block is the signal that something is wrong.
+    mockSpawn.mockImplementationOnce(() => {
+      const proc = Object.assign(new EventEmitter(), {
+        kill: vi.fn(),
+        stdin: new PassThrough(),
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+      });
+      queueMicrotask(() => {
+        proc.stdout.write("not json at all — codex regression\n");
+        proc.stdout.write('{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n');
+        proc.stdout.end();
+        proc.stderr.end();
+        proc.emit("close", 0, null);
+      });
+      return proc as unknown as import("node:child_process").ChildProcess;
+    });
+
+    const app = await createApp({
+      type: "board",
+      userId: "board-user-malformed",
+      companyIds: ["company-1"],
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+
+    const res = await request(app)
+      .post("/api/chat/completions")
+      .send({
+        model: "gpt-5.4",
+        messages: [{ role: "user", content: "judge" }],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.choices[0].message.content).toContain("not json at all");
+  });
+
+  it("returns 500 when codex returns no assistant content", async () => {
+    // The route's "no content" path is reached only when stdout has NO
+    // non-empty lines at all. Otherwise the trailing-line fallback at the
+    // bottom of runCodexChatCompletion happily uses the last stdout line.
+    mockSpawn.mockImplementationOnce(() => {
+      const proc = Object.assign(new EventEmitter(), {
+        kill: vi.fn(),
+        stdin: new PassThrough(),
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+      });
+      queueMicrotask(() => {
+        // Emit ONLY whitespace lines — no content, no agent_message JSON event.
+        proc.stdout.write("\n");
+        proc.stdout.write("   \n");
+        proc.stdout.write("\n");
+        proc.stdout.end();
+        proc.stderr.end();
+        proc.emit("close", 0, null);
+      });
+      return proc as unknown as import("node:child_process").ChildProcess;
+    });
+
+    const app = await createApp({
+      type: "board",
+      userId: "board-user-empty",
+      companyIds: ["company-1"],
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+
+    const res = await request(app)
+      .post("/api/chat/completions")
+      .send({
+        model: "gpt-5.4",
+        messages: [{ role: "user", content: "judge" }],
+      });
+
+    expect(res.status).toBe(500);
+  });
+
+  it("returns 500 when the spawned codex process emits an error event", async () => {
+    mockSpawn.mockImplementationOnce(() => {
+      const proc = Object.assign(new EventEmitter(), {
+        kill: vi.fn(),
+        stdin: new PassThrough(),
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+      });
+      queueMicrotask(() => {
+        proc.emit("error", new Error("spawn ENOENT codex"));
+      });
+      return proc as unknown as import("node:child_process").ChildProcess;
+    });
+
+    const app = await createApp({
+      type: "board",
+      userId: "board-user-spawn-err",
+      companyIds: ["company-1"],
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+
+    const res = await request(app)
+      .post("/api/chat/completions")
+      .send({
+        model: "gpt-5.4",
+        messages: [{ role: "user", content: "judge" }],
+      });
+
+    expect(res.status).toBe(500);
+  });
+
+  it("returns 429 when the per-actor rate limit is exceeded", async () => {
+    // The rate limit is 60 requests per 60s per actor. Pick a unique
+    // userId so the count starts at zero inside this test.
+    mockSpawn.mockImplementation(() => {
+      const proc = makeSuccessProc({ ok: true });
+      return proc as unknown as import("node:child_process").ChildProcess;
+    });
+
+    const app = await createApp({
+      type: "board",
+      userId: "board-user-rate-limit",
+      companyIds: ["company-1"],
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+
+    // Fire 60 successful requests to exhaust the window. The route checks
+    // `state.count >= 60` before incrementing, so request #60 is the LAST
+    // allowed request.
+    for (let i = 0; i < 60; i += 1) {
+      const r = await request(app)
+        .post("/api/chat/completions")
+        .send({
+          model: "gpt-5.4",
+          messages: [{ role: "user", content: "judge" }],
+        });
+      if (r.status !== 200) {
+        throw new Error(`request ${i} returned ${r.status}: ${JSON.stringify(r.body)}`);
+      }
+    }
+
+    // The 61st request must be rate-limited.
+    const limited = await request(app)
+      .post("/api/chat/completions")
+      .send({
+        model: "gpt-5.4",
+        messages: [{ role: "user", content: "judge" }],
+      });
+
+    expect(limited.status).toBe(429);
+    expect(limited.body.error).toContain("rate limit");
+    expect(limited.headers["retry-after"]).toBeDefined();
   });
 });

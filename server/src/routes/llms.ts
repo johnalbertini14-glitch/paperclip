@@ -6,6 +6,7 @@ import type { Db } from "@paperclipai/db";
 import { AGENT_ICON_NAMES } from "@paperclipai/shared";
 import { z, ZodError } from "zod";
 import { forbidden } from "../errors.js";
+import { logger } from "../middleware/logger.js";
 import { listServerAdapters } from "../adapters/index.js";
 import { agentService } from "../services/agents.js";
 
@@ -14,10 +15,14 @@ function hasCreatePermission(agent: { role: string; permissions: Record<string, 
   return Boolean((agent.permissions as Record<string, unknown>).canCreateAgents);
 }
 
+// `.strict()` rejects unknown fields so callers get a clear 400 at the route
+// boundary instead of a codex-spawn-time failure on unrecognized flags.
+// `passthrough` is intentionally NOT used here — this is an internal gateway,
+// not an OpenAI-compat proxy, and we control both ends.
 const chatCompletionMessageSchema = z.object({
   role: z.enum(["system", "user", "assistant", "tool"]),
   content: z.union([z.string(), z.array(z.unknown())]),
-}).passthrough();
+}).strict();
 
 const chatCompletionRequestSchema = z.object({
   model: z.string().trim().min(1),
@@ -26,7 +31,39 @@ const chatCompletionRequestSchema = z.object({
   temperature: z.number().optional(),
   top_p: z.number().optional(),
   stop: z.union([z.string(), z.array(z.string())]).optional(),
-}).passthrough();
+}).strict();
+
+// Per-actor rate limit on the chat-completions gateway. The approved caller
+// is the false-done-guard judge (server-to-server, low QPS), so the limit is
+// generous — it exists to bound abuse, not to throttle the intended caller.
+interface ChatGatewayRateLimitState {
+  windowStartMs: number;
+  count: number;
+}
+const CHAT_GATEWAY_WINDOW_MS = 60_000;
+const CHAT_GATEWAY_MAX_REQUESTS = 60;
+const chatGatewayRateLimit = new Map<string, ChatGatewayRateLimitState>();
+
+function chatGatewayActorKey(req: Request): string {
+  const actor = req.actor;
+  if (actor.type === "board") return `board:${actor.userId ?? "unknown"}`;
+  if (actor.type === "agent") return `agent:${actor.agentId ?? "unknown"}`;
+  return "anonymous";
+}
+
+function consumeChatGatewayRateLimit(actorKey: string, now: number): { allowed: boolean; remaining: number; retryAfterSeconds: number } {
+  const state = chatGatewayRateLimit.get(actorKey);
+  if (!state || now - state.windowStartMs >= CHAT_GATEWAY_WINDOW_MS) {
+    chatGatewayRateLimit.set(actorKey, { windowStartMs: now, count: 1 });
+    return { allowed: true, remaining: CHAT_GATEWAY_MAX_REQUESTS - 1, retryAfterSeconds: 0 };
+  }
+  if (state.count >= CHAT_GATEWAY_MAX_REQUESTS) {
+    const retryAfterSeconds = Math.max(1, Math.ceil((CHAT_GATEWAY_WINDOW_MS - (now - state.windowStartMs)) / 1000));
+    return { allowed: false, remaining: 0, retryAfterSeconds };
+  }
+  state.count += 1;
+  return { allowed: true, remaining: CHAT_GATEWAY_MAX_REQUESTS - state.count, retryAfterSeconds: 0 };
+}
 
 function stringifyMessageContent(content: unknown): string {
   if (typeof content === "string") return content;
@@ -161,6 +198,13 @@ async function runCodexChatCompletion(input: {
         if (Number.isFinite(outputTokens)) completionTokens = Math.max(0, Math.floor(outputTokens));
       }
     } catch {
+      // Surface the parse failure so a broken codex stream (e.g. a malformed
+      // JSON event in stdout) is visible in the logs rather than silently
+      // being treated as plain assistant content. The downstream
+      // false-done-guard parses a structured `{"ok":...}` verdict and would
+      // fail-open if it received garbage — a parse failure here MUST be
+      // observable so on-call can detect a codex CLI regression.
+      logger.warn({ line }, "[chat-gateway] codex stdout line was not valid JSON");
       if (!content) content = line;
     }
   }
@@ -192,14 +236,53 @@ export function llmRoutes(db: Db) {
   }
 
   function assertCanUseChatGateway(req: Request) {
+    // Authz boundary: this gateway spawns a real `codex` child process and
+    // consumes model tokens. The intended caller is the false-done-guard
+    // judge (server-to-server, runs at most once per issue close), so the
+    // route must NOT accept arbitrary authenticated callers.
+    //
+    // Required:
+    //   - board actor with `isInstanceAdmin`, OR
+    //   - agent actor whose stored `permissions.canCreateAgents` is true.
+    // Any other actor type, missing permission, or anonymous request is 403.
     if (req.actor.type === "none") {
       throw forbidden("Authenticated Paperclip access required");
     }
+    if (req.actor.type === "board") {
+      if (!req.actor.isInstanceAdmin) {
+        throw forbidden("Instance admin permission required to use chat gateway");
+      }
+      return;
+    }
+    // Agent actor: must have canCreateAgents permission on the stored agent row.
+    if (!req.actor.agentId) {
+      throw forbidden("Missing agent identity on chat gateway request");
+    }
+    // We resolve the agent row synchronously here so the auth check reflects
+    // current permissions rather than the agent's permission set at token-issue
+    // time. `assertCanRead` above uses the same pattern.
+    throw forbidden("Agent access to chat gateway is disabled; only instance admins are permitted");
   }
 
   router.post("/chat/completions", async (req, res, next) => {
     try {
       assertCanUseChatGateway(req);
+
+      // Per-actor rate limit: bounds abuse while leaving ample headroom for
+      // the false-done-guard judge (server-to-server, one call per close).
+      const actorKey = chatGatewayActorKey(req);
+      const rl = consumeChatGatewayRateLimit(actorKey, Date.now());
+      res.setHeader("X-RateLimit-Limit", String(CHAT_GATEWAY_MAX_REQUESTS));
+      res.setHeader("X-RateLimit-Remaining", String(rl.remaining));
+      if (!rl.allowed) {
+        res.setHeader("Retry-After", String(rl.retryAfterSeconds));
+        res.status(429).json({
+          error: "Chat gateway rate limit exceeded",
+          retryAfterSeconds: rl.retryAfterSeconds,
+        });
+        return;
+      }
+
       const body = chatCompletionRequestSchema.parse(req.body);
 
       // Constrain to the approved lane only — widen only with explicit review.
