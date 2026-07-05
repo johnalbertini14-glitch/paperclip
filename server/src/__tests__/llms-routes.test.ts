@@ -92,7 +92,7 @@ describe("llm routes", () => {
     proc.kill = vi.fn();
 
     mockSpawn.mockImplementationOnce(() => {
-      queueMicrotask(() => {
+      setImmediate(() => {
         stdout.write('{"type":"thread.started","thread_id":"thread-1"}\n');
         stdout.write('{"type":"item.completed","item":{"type":"agent_message","text":"{\\"ok\\":true,\\"reason\\":\\"looks good\\",\\"missing\\":[]}"}}\n');
         stdout.write('{"type":"turn.completed","usage":{"input_tokens":12,"output_tokens":8}}\n');
@@ -182,7 +182,7 @@ describe("llm routes", () => {
     proc.kill = vi.fn();
 
     mockSpawn.mockImplementationOnce(() => {
-      queueMicrotask(() => {
+      setImmediate(() => {
         stdout.write('{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n');
         stdout.write('{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n');
         stdout.end();
@@ -248,8 +248,16 @@ describe("llm routes", () => {
 
     mockSpawn.mockImplementationOnce(() => {
       // Emit close via microtask so listeners registered by runCodexChatCompletion
-      // are in place before the event fires.
-      queueMicrotask(() => proc.emit("close", 0, null));
+      // are in place before the event fires.  Also end the streams (like the
+      // working "forwards controls" test does) so the "close" event fires
+      // reliably from within the async route handler rather than after it returns.
+      queueMicrotask(() => {
+        proc.stdout.write('{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n');
+        proc.stdout.write('{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n');
+        proc.stdout.end();
+        proc.stderr.end();
+        proc.emit("close", 0, null);
+      });
       return proc as unknown as import("node:child_process").ChildProcess;
     });
 
@@ -276,12 +284,7 @@ describe("llm routes", () => {
     const spawnOpts = lastSpawnCall?.[2] as { signal?: AbortSignal } | undefined;
     expect(spawnOpts?.signal).toBeDefined();
 
-    // Wire our mock kill as the abort listener and fire the signal.
-    // Node.js will auto-SIGKILL the child when the signal fires.
-    spawnOpts!.signal!.addEventListener("abort", () => killMock("SIGKILL"));
-    const controller = new AbortController();
-    controller.abort(); // simulates setTimeout(() => controller.abort(), 60_000)
-
+    spawnOpts!.signal!.dispatchEvent(new Event("abort"));
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
