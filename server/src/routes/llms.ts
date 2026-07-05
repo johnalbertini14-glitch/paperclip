@@ -5,7 +5,7 @@ import { Router, type Request } from "express";
 import type { Db } from "@paperclipai/db";
 import { AGENT_ICON_NAMES } from "@paperclipai/shared";
 import { z, ZodError } from "zod";
-import { forbidden } from "../errors.js";
+import { forbidden, HttpError } from "../errors.js";
 import { listServerAdapters } from "../adapters/index.js";
 import { hermesGatewayAgentConfigurationDoc } from "../adapters/hermes-gateway-doc.js";
 import { agentService } from "../services/agents.js";
@@ -356,7 +356,16 @@ export function llmRoutes(db: Db, opts: LlmRoutesOptions = {}) {
       }
       // Log caught errors; don't let internal failures masquerade as client errors.
       logger.error({ error: err }, "Chat completion error");
-      next(err);
+      if (err instanceof HttpError) {
+        next(err);
+        return;
+      }
+      // Surface the underlying error message to the caller as a 500 so
+      // operators get actionable detail (e.g. "codex exec exited with code 1"
+      // or "codex output line is not valid JSON: ...").  Internal stack
+      // traces remain in the log line above, not in the response body.
+      const message = err instanceof Error ? err.message : String(err);
+      next(new HttpError(500, message));
     }
   });
 
