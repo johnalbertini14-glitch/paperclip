@@ -9,6 +9,11 @@ import { forbidden } from "../errors.js";
 import { listServerAdapters } from "../adapters/index.js";
 import { hermesGatewayAgentConfigurationDoc } from "../adapters/hermes-gateway-doc.js";
 import { agentService } from "../services/agents.js";
+import { logger } from "../middleware/logger.js";
+import {
+  type ChatGatewayRateLimiter,
+  createChatGatewayRateLimiter,
+} from "../services/chat-gateway-rate-limit.js";
 
 const pluginOnlyAdapterDocs = new Map<string, string>([
   ["hermes_gateway", hermesGatewayAgentConfigurationDoc],
@@ -22,8 +27,12 @@ function hasCreatePermission(agent: { role: string; permissions: Record<string, 
 const chatCompletionMessageSchema = z.object({
   role: z.enum(["system", "user", "assistant", "tool"]),
   content: z.union([z.string(), z.array(z.unknown())]),
-}).passthrough();
+  name: z.string().optional(),
+}).strict();
 
+// Request schema is .strict() so unknown fields surface as a 400 at parse
+// time instead of being silently forwarded to the codex CLI (which would
+// either ignore them or reject them at spawn time with a worse error path).
 const chatCompletionRequestSchema = z.object({
   model: z.string().trim().min(1),
   messages: z.array(chatCompletionMessageSchema).min(1),
@@ -31,7 +40,7 @@ const chatCompletionRequestSchema = z.object({
   temperature: z.number().optional(),
   top_p: z.number().optional(),
   stop: z.union([z.string(), z.array(z.string())]).optional(),
-}).passthrough();
+}).strict();
 
 function stringifyMessageContent(content: unknown): string {
   if (typeof content === "string") return content;
@@ -165,15 +174,13 @@ async function runCodexChatCompletion(input: {
         if (Number.isFinite(inputTokens)) promptTokens = Math.max(0, Math.floor(inputTokens));
         if (Number.isFinite(outputTokens)) completionTokens = Math.max(0, Math.floor(outputTokens));
       }
-    } catch {
-      if (!content) content = line;
+    } catch (parseErr) {
+      throw new Error(
+        `codex output line is not valid JSON: ${JSON.stringify(line)} — ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
+      );
     }
   }
 
-  if (!content) {
-    const fallback = stdout.trim();
-    if (fallback) content = fallback.split(/\r?\n/).pop()!.trim();
-  }
   if (!content) {
     throw new Error(stderr.trim() || "codex exec returned no assistant message");
   }
@@ -181,9 +188,18 @@ async function runCodexChatCompletion(input: {
   return { content, promptTokens, completionTokens };
 }
 
-export function llmRoutes(db: Db) {
+export type LlmRoutesOptions = {
+  /**
+   * Override the default chat-gateway rate limiter (used by tests).
+   * Defaults to a 30-req / 60s sliding window per actor.
+   */
+  chatRateLimiter?: ChatGatewayRateLimiter;
+};
+
+export function llmRoutes(db: Db, opts: LlmRoutesOptions = {}) {
   const router = Router();
   const agentsSvc = agentService(db);
+  const chatRateLimiter = opts.chatRateLimiter ?? createChatGatewayRateLimiter();
 
   async function assertCanRead(req: Request) {
     if (req.actor.type === "board") return;
@@ -196,15 +212,94 @@ export function llmRoutes(db: Db) {
     }
   }
 
+  /**
+   * Chat gateway auth gate.
+   *
+   * Intended caller: the false-done-guard judge running inside this same
+   * Paperclip server (server/src/services/false-done-guard.ts:242), which
+   * authenticates with the long-lived `PAPERCLIP_API_KEY` service key.
+   *
+   * That call path produces a board actor whose `isInstanceAdmin` flag is
+   * derived from the API key's owner — see middleware/auth.ts:115-126. We
+   * therefore restrict this endpoint to admin board actors OR agents with the
+   * `canCreateAgents` permission (the same `hasCreatePermission` precedent
+   * used by `assertCanRead` above for the agent-configuration reflection).
+   *
+   * Anonymous and non-admin authenticated actors are rejected with 403.
+   *
+   * Rate limiting: callers that pass this gate are additionally throttled
+   * by `chatRateLimiter` (default 30 req / 60s per actor). This is
+   * defense-in-depth — the intended caller is the server-side judge, so a
+   * legitimate admin should never hit the ceiling, but a leaked admin key
+   * or a misbehaving agent cannot spawn unlimited codex runs.
+   */
   function assertCanUseChatGateway(req: Request) {
-    if (req.actor.type === "none") {
+    const actor = req.actor as {
+      type: string;
+      isInstanceAdmin?: boolean;
+      agentId?: string;
+      role?: string;
+      permissions?: Record<string, unknown> | null;
+    };
+    if (actor.type === "none") {
       throw forbidden("Authenticated Paperclip access required");
     }
+    if (actor.type === "agent") {
+      if (
+        !actor.role ||
+        !hasCreatePermission({ role: actor.role, permissions: actor.permissions ?? null })
+      ) {
+        throw forbidden(
+          "Agent is missing the canCreateAgents permission required to use the chat gateway",
+        );
+      }
+      return;
+    }
+    if (!actor.isInstanceAdmin) {
+      throw forbidden("Instance admin permission required to use the chat gateway");
+    }
+  }
+
+  function chatGatewayRateLimitActor(req: Request): {
+    actorType: "agent" | "board";
+    actorId: string;
+  } | null {
+    const actor = req.actor as {
+      type: string;
+      isInstanceAdmin?: boolean;
+      agentId?: string;
+    };
+    if (actor.type === "agent") {
+      return actor.agentId
+        ? { actorType: "agent", actorId: actor.agentId }
+        : null;
+    }
+    if (actor.type === "board" && actor.isInstanceAdmin) {
+      return { actorType: "board", actorId: "instance-admin" };
+    }
+    return null;
   }
 
   router.post("/chat/completions", async (req, res, next) => {
     try {
       assertCanUseChatGateway(req);
+      const rateLimitActor = chatGatewayRateLimitActor(req);
+      if (rateLimitActor) {
+        const rateLimit = chatRateLimiter.consume(rateLimitActor);
+        res.setHeader("X-RateLimit-Limit", String(rateLimit.limit));
+        res.setHeader(
+          "X-RateLimit-Remaining",
+          String(rateLimit.remaining),
+        );
+        if (!rateLimit.allowed) {
+          res.setHeader("Retry-After", String(rateLimit.retryAfterSeconds));
+          res.status(429).json({
+            error: "Chat gateway rate limit exceeded",
+            retryAfterSeconds: rateLimit.retryAfterSeconds,
+          });
+          return;
+        }
+      }
       const body = chatCompletionRequestSchema.parse(req.body);
 
       // Constrain to the approved lane only — widen only with explicit review.
@@ -259,6 +354,8 @@ export function llmRoutes(db: Db) {
         });
         return;
       }
+      // Log caught errors; don't let internal failures masquerade as client errors.
+      logger.error({ error: err }, "Chat completion error");
       next(err);
     }
   });

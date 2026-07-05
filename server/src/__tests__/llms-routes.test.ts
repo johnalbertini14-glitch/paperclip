@@ -3,6 +3,8 @@ import request from "supertest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatGatewayRateLimiter } from "../services/chat-gateway-rate-limit.js";
+import { createChatGatewayRateLimiter } from "../services/chat-gateway-rate-limit.js";
 
 const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -48,7 +50,10 @@ function registerModuleMocks() {
   }));
 }
 
-async function createApp(actor: Record<string, unknown>) {
+async function createApp(
+  actor: Record<string, unknown>,
+  opts: { chatRateLimiter?: ChatGatewayRateLimiter } = {},
+) {
   const [{ llmRoutes }, { errorHandler }] = await Promise.all([
     vi.importActual<typeof import("../routes/llms.js")>("../routes/llms.js"),
     vi.importActual<typeof import("../middleware/index.js")>("../middleware/index.js"),
@@ -59,7 +64,7 @@ async function createApp(actor: Record<string, unknown>) {
     (req as any).actor = actor;
     next();
   });
-  app.use("/api", llmRoutes({} as never));
+  app.use("/api", llmRoutes({} as never, opts));
   app.use(errorHandler);
   return app;
 }
@@ -340,6 +345,300 @@ describe("llm routes", () => {
     expect(res.text).toContain("sourceIssueId/sourceIssueIds");
     expect(res.text).toContain("Timer heartbeats are opt-in for new hires.");
     expect(res.text).toContain("Leave runtimeConfig.heartbeat.enabled false");
+  });
+
+  it("rejects unauthenticated access with 403", async () => {
+    const app = await createApp({
+      type: "none",
+    });
+
+    const res = await request(app).post("/api/chat/completions").send({
+      model: "gpt-5.4",
+      messages: [{ role: "user", content: "hello" }],
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain("Authenticated Paperclip access required");
+  });
+
+  it("rejects agent without canCreateAgents permission with 403", async () => {
+    mockAgentService.getById.mockResolvedValueOnce({
+      id: "agent-1",
+      role: "researcher",
+      permissions: { canCreateAgents: false },
+    });
+
+    const app = await createApp({
+      type: "agent",
+      agentId: "agent-1",
+      role: "researcher",
+      permissions: { canCreateAgents: false },
+    });
+
+    const res = await request(app).post("/api/chat/completions").send({
+      model: "gpt-5.4",
+      messages: [{ role: "user", content: "hello" }],
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain("canCreateAgents permission");
+  });
+
+  it("rejects non-admin board actor with 403", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "board-user",
+      companyIds: ["company-1"],
+      isInstanceAdmin: false,
+    });
+
+    const res = await request(app).post("/api/chat/completions").send({
+      model: "gpt-5.4",
+      messages: [{ role: "user", content: "hello" }],
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain("Instance admin permission required");
+  });
+
+  it("rejects malformed JSON in request with 400", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "board-user",
+      companyIds: ["company-1"],
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+
+    const res = await request(app).post("/api/chat/completions").send({
+      model: "gpt-5.4",
+      messages: [{ role: "user", content: "hello" }],
+      unknown_field: "should be rejected",
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("Invalid chat completion request");
+  });
+
+  it("surfaced error when codex exits with non-zero code", async () => {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const stdin = new PassThrough();
+    const proc = new EventEmitter() as EventEmitter & {
+      stdin: PassThrough;
+      stdout: PassThrough;
+      stderr: PassThrough;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    proc.stdin = stdin;
+    proc.stdout = stdout;
+    proc.stderr = stderr;
+    proc.kill = vi.fn();
+
+    mockSpawn.mockImplementationOnce(() => {
+      setImmediate(() => {
+        stderr.write("codex error: model not found\n");
+        stdout.end();
+        stderr.end();
+        proc.emit("close", 1, null);
+      });
+      return proc;
+    });
+
+    const app = await createApp({
+      type: "board",
+      userId: "board-user",
+      companyIds: ["company-1"],
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+
+    const res = await request(app).post("/api/chat/completions").send({
+      model: "gpt-5.4",
+      messages: [{ role: "user", content: "hello" }],
+    });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toContain("codex error: model not found");
+  });
+
+  it("surfaces error when codex returns malformed JSON line", async () => {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const stdin = new PassThrough();
+    const proc = new EventEmitter() as EventEmitter & {
+      stdin: PassThrough;
+      stdout: PassThrough;
+      stderr: PassThrough;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    proc.stdin = stdin;
+    proc.stdout = stdout;
+    proc.stderr = stderr;
+    proc.kill = vi.fn();
+
+    mockSpawn.mockImplementationOnce(() => {
+      setImmediate(() => {
+        stdout.write("not-valid-json\n");
+        stdout.end();
+        stderr.end();
+        proc.emit("close", 0, null);
+      });
+      return proc;
+    });
+
+    const app = await createApp({
+      type: "board",
+      userId: "board-user",
+      companyIds: ["company-1"],
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+
+    const res = await request(app).post("/api/chat/completions").send({
+      model: "gpt-5.4",
+      messages: [{ role: "user", content: "hello" }],
+    });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toContain("codex output line is not valid JSON");
+  });
+
+  it("surfaces error when codex returns empty content", async () => {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const stdin = new PassThrough();
+    const proc = new EventEmitter() as EventEmitter & {
+      stdin: PassThrough;
+      stdout: PassThrough;
+      stderr: PassThrough;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    proc.stdin = stdin;
+    proc.stdout = stdout;
+    proc.stderr = stderr;
+    proc.kill = vi.fn();
+
+    mockSpawn.mockImplementationOnce(() => {
+      setImmediate(() => {
+        stdout.write('{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n');
+        stdout.end();
+        stderr.end();
+        proc.emit("close", 0, null);
+      });
+      return proc;
+    });
+
+    const app = await createApp({
+      type: "board",
+      userId: "board-user",
+      companyIds: ["company-1"],
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+
+    const res = await request(app).post("/api/chat/completions").send({
+      model: "gpt-5.4",
+      messages: [{ role: "user", content: "hello" }],
+    });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toContain("codex exec returned no assistant message");
+  });
+
+  it("surfaces error when codex spawn fails", async () => {
+    mockSpawn.mockImplementationOnce(() => {
+      throw new Error("codex executable not found");
+    });
+
+    const app = await createApp({
+      type: "board",
+      userId: "board-user",
+      companyIds: ["company-1"],
+      source: "local_implicit",
+      isInstanceAdmin: true,
+    });
+
+    const res = await request(app).post("/api/chat/completions").send({
+      model: "gpt-5.4",
+      messages: [{ role: "user", content: "hello" }],
+    });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toContain("codex executable not found");
+  });
+
+  it("throttles repeated same-actor chat gateway calls with 429 and rate-limit headers", async () => {
+    mockSpawn.mockImplementation(() => makeNoopProc());
+
+    // 1 request per minute ceiling so the second call trips the limiter.
+    const limiter = createChatGatewayRateLimiter({
+      maxRequests: 1,
+      windowMs: 60_000,
+      now: () => 1_000,
+    });
+
+    const app = await createApp(
+      {
+        type: "board",
+        userId: "board-user",
+        companyIds: ["company-1"],
+        source: "local_implicit",
+        isInstanceAdmin: true,
+      },
+      { chatRateLimiter: limiter },
+    );
+
+    // Each chat call needs a spawn implementation that emits a usable
+    // assistant message so the success path actually completes; otherwise
+    // the 200 response never lands and we can't observe the headers.
+    mockSpawn.mockImplementationOnce(() => {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const stdin = new PassThrough();
+      const proc = Object.assign(new EventEmitter(), {
+        kill: vi.fn(),
+        stdin,
+        stdout,
+        stderr,
+      });
+      queueMicrotask(() => {
+        stdout.write(
+          '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n',
+        );
+        stdout.write(
+          '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n',
+        );
+        stdout.end();
+        stderr.end();
+        proc.emit("close", 0, null);
+      });
+      return proc as unknown as import("node:child_process").ChildProcess;
+    });
+
+    const first = await request(app).post("/api/chat/completions").send({
+      model: "gpt-5.4",
+      messages: [{ role: "user", content: "hello" }],
+    });
+    expect(first.status).toBe(200);
+    expect(first.headers["x-ratelimit-limit"]).toBe("1");
+    expect(first.headers["x-ratelimit-remaining"]).toBe("0");
+
+    const limited = await request(app).post("/api/chat/completions").send({
+      model: "gpt-5.4",
+      messages: [{ role: "user", content: "hello" }],
+    });
+    expect(limited.status).toBe(429);
+    expect(limited.body).toMatchObject({
+      error: "Chat gateway rate limit exceeded",
+      retryAfterSeconds: 60,
+    });
+    expect(limited.headers["retry-after"]).toBe("60");
+    expect(limited.headers["x-ratelimit-remaining"]).toBe("0");
+
+    // The second call must not have spawned a codex child — the limiter
+    // runs before the schema parse and the codex spawn.
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 });
 
