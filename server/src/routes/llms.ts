@@ -35,6 +35,9 @@ function stringifyMessageContent(content: unknown): string {
   return String(content);
 }
 
+// Approved model lane — the false-done guard judge is the only intended caller.
+const APPROVED_CHAT_MODEL = "gpt-5.4";
+
 function buildCodexPrompt(messages: Array<{ role: string; content: unknown }>): string {
   const transcript = messages
     .map((message) => `${message.role.toUpperCase()}:\n${stringifyMessageContent(message.content)}`)
@@ -48,17 +51,58 @@ function buildCodexPrompt(messages: Array<{ role: string; content: unknown }>): 
   ].join("\n");
 }
 
+interface ChatCompletionControls {
+  max_tokens?: number;
+  temperature?: number;
+  top_p?: number;
+  stop?: string | string[];
+}
+
 async function runCodexChatCompletion(input: {
   model: string;
   messages: Array<{ role: string; content: unknown }>;
+  controls?: ChatCompletionControls;
+  signal?: AbortSignal;
 }): Promise<{ content: string; promptTokens: number; completionTokens: number }> {
   const here = new URL(".", import.meta.url);
   const repoRoot = new URL("../../../", here).pathname;
-  const proc = spawn("codex", ["exec", "--json", "--model", input.model, "-"], {
+
+  const codexArgs = ["exec", "--json", "--model", input.model];
+  if (input.controls?.max_tokens !== undefined) {
+    codexArgs.push("--max-tokens", String(input.controls.max_tokens));
+  }
+  if (input.controls?.temperature !== undefined) {
+    codexArgs.push("--temperature", String(input.controls.temperature));
+  }
+  if (input.controls?.top_p !== undefined) {
+    codexArgs.push("--top-p", String(input.controls.top_p));
+  }
+  if (input.controls?.stop !== undefined) {
+    const stops = Array.isArray(input.controls.stop) ? input.controls.stop : [input.controls.stop];
+    for (const s of stops) {
+      codexArgs.push("--stop", s);
+    }
+  }
+  codexArgs.push("-");
+
+  // Pass the AbortSignal so Node.js can auto-SIGKILL the child when the
+  // signal is aborted.  Omit the key when no signal is provided so spawn
+  // behaves as if the option were absent.
+  const spawnOpts: {
+    cwd: string;
+    env: typeof process.env;
+    stdio: ["pipe", "pipe", "pipe"];
+    signal?: AbortSignal;
+  } = {
     cwd: repoRoot,
     env: process.env,
     stdio: ["pipe", "pipe", "pipe"],
-  });
+  };
+  if (input.signal) {
+    spawnOpts.signal = input.signal;
+  }
+
+  const proc = spawn("codex", codexArgs, spawnOpts);
 
   const stdoutChunks: string[] = [];
   const stderrChunks: string[] = [];
@@ -73,6 +117,15 @@ async function runCodexChatCompletion(input: {
   proc.stderr.on("data", (chunk: Buffer) => {
     stderrChunks.push(chunk.toString("utf8"));
   });
+
+  // Secondary SIGKILL cleanup for abort signals that fire after the process
+  // has already exited — guards against the race where Promise.race resolves
+  // and then the signal fires before we tear down.
+  if (input.signal) {
+    input.signal.addEventListener("abort", () => {
+      proc.kill("SIGKILL");
+    });
+  }
 
   const closeArgs = await Promise.race([
     once(proc, "close"),
@@ -148,10 +201,32 @@ export function llmRoutes(db: Db) {
     try {
       assertCanUseChatGateway(req);
       const body = chatCompletionRequestSchema.parse(req.body);
+
+      // Constrain to the approved lane only — widen only with explicit review.
+      if (body.model !== APPROVED_CHAT_MODEL) {
+        res.status(400).json({
+          error: `Model not supported`,
+          detail: `Only '${APPROVED_CHAT_MODEL}' is supported on this endpoint.`,
+        });
+        return;
+      }
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 60_000);
+
       const completion = await runCodexChatCompletion({
         model: body.model,
         messages: body.messages,
+        controls: {
+          max_tokens: body.max_tokens,
+          temperature: body.temperature,
+          top_p: body.top_p,
+          stop: body.stop,
+        },
+        signal: controller.signal,
       });
+
+      clearTimeout(timer);
 
       res.json({
         id: `chatcmpl-${randomUUID()}`,
