@@ -6112,6 +6112,11 @@ export function issueRoutes(
       }
     }
 
+    const pendingCloseCommentEvidence =
+      commentBody && updateFields.status === "done"
+        ? { pendingCloseCommentCount: 1, pendingCloseCommentBody: commentBody }
+        : {};
+
     let issue;
     try {
       if (transition.decision && decisionId) {
@@ -6123,6 +6128,7 @@ export function issueRoutes(
               ...updateFields,
               actorAgentId: actor.agentId ?? null,
               actorUserId: actor.actorType === "user" ? actor.actorId : null,
+              ...pendingCloseCommentEvidence,
             },
             tx,
           );
@@ -6148,6 +6154,7 @@ export function issueRoutes(
           ...updateFields,
           actorAgentId: actor.agentId ?? null,
           actorUserId: actor.actorType === "user" ? actor.actorId : null,
+          ...pendingCloseCommentEvidence,
         });
       }
     } catch (err) {

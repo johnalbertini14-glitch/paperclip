@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { asc, eq } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import {
   activityLog,
@@ -36,6 +36,7 @@ import {
   ISSUE_LIST_MAX_LIMIT,
   issueService,
 } from "../services/issues.ts";
+import * as falseDoneGuard from "../services/false-done-guard.js";
 import { buildAgentMentionHref, buildProjectMentionHref, MAX_ISSUE_REQUEST_DEPTH, type IssueWorkMode } from "@paperclipai/shared";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -329,6 +330,42 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
     });
     return companyId;
   }
+
+  it("passes same-request close comment evidence into the false-done guard", async () => {
+    vi.stubEnv("FALSE_DONE_GUARD_MODE", "shadow");
+    vi.stubEnv("PAPERCLIP_FALSE_DONE_JUDGE_MODEL", "test-model");
+    vi.stubEnv("PAPERCLIP_API_URL", "http://localhost:1234");
+    vi.stubEnv("PAPERCLIP_API_KEY", "test-key");
+
+    const guardSpy = vi.spyOn(falseDoneGuard, "assertFalseDoneGuard").mockResolvedValue({
+      allowed: true,
+    });
+
+    try {
+      const companyId = await seedAssignableAgentCompany();
+      const svc = issueService(db);
+      const issue = await svc.create(companyId, {
+        title: "Close me",
+        description: null,
+        status: "todo",
+        priority: "medium",
+      });
+
+      await svc.update(issue.id, {
+        status: "done",
+        pendingCloseCommentCount: 1,
+        pendingCloseCommentBody: "closing this with evidence",
+      });
+
+      expect(guardSpy).toHaveBeenCalledTimes(1);
+      const guardInput = guardSpy.mock.calls[0]?.[0];
+      expect(guardInput?.evidence.pendingCloseCommentCount).toBe(1);
+      expect(guardInput?.evidence.pendingCloseCommentBody).toBe("closing this with evidence");
+    } finally {
+      guardSpy.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
 
   function agentRow(companyId: string, input: {
     id: string;
