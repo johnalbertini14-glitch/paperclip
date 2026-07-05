@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pageindex"
+version = "0.1.0"
+description = "Semantic tree adapter for vectorless document processing in Paperclip"
+readme = "README.md"
+requires-python = ">=3.8"
+keywords = ["semantic", "tree", "document", "processing", "paperclip"]
+
+dependencies = [
+    "pydantic>=2.0",
+    "aiofiles>=23.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.20.0",
+    "pytest-cov>=4.0",
+    "black>=23.0",
+    "mypy>=1.0",
+    "pylint>=2.17",
+]
+
+[tool.setuptools]
+packages = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ["py38", "py39", "py310", "py311"]
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pylint.messages_control]
+disable = ["C0111"]  # missing-docstring
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: Integration tests with Paperclip",
+    "asyncio: Async test using pytest-asyncio",
+    "performance: Performance/benchmark tests",
+    "security: Security/validation tests",
+    "unit: Unit tests",
+]

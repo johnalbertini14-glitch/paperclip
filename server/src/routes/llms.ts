@@ -1,10 +1,19 @@
+import { randomUUID } from "node:crypto";
+import { once } from "node:events";
+import { spawn } from "node:child_process";
 import { Router, type Request } from "express";
 import type { Db } from "@paperclipai/db";
 import { AGENT_ICON_NAMES } from "@paperclipai/shared";
-import { forbidden } from "../errors.js";
+import { z, ZodError } from "zod";
+import { forbidden, HttpError } from "../errors.js";
 import { listServerAdapters } from "../adapters/index.js";
 import { hermesGatewayAgentConfigurationDoc } from "../adapters/hermes-gateway-doc.js";
 import { agentService } from "../services/agents.js";
+import { logger } from "../middleware/logger.js";
+import {
+  type ChatGatewayRateLimiter,
+  createChatGatewayRateLimiter,
+} from "../services/chat-gateway-rate-limit.js";
 
 const pluginOnlyAdapterDocs = new Map<string, string>([
   ["hermes_gateway", hermesGatewayAgentConfigurationDoc],
@@ -15,9 +24,166 @@ function hasCreatePermission(agent: { role: string; permissions: Record<string, 
   return Boolean((agent.permissions as Record<string, unknown>).canCreateAgents);
 }
 
-export function llmRoutes(db: Db) {
+const chatCompletionMessageSchema = z.object({
+  role: z.enum(["system", "user", "assistant", "tool"]),
+  content: z.union([z.string(), z.array(z.unknown())]),
+  name: z.string().optional(),
+}).strict();
+
+// Request schema is .strict() so unknown fields surface as a 400 at parse
+// time instead of being silently forwarded to the codex CLI (which would
+// either ignore them or reject them at spawn time with a worse error path).
+const chatCompletionRequestSchema = z.object({
+  model: z.string().trim().min(1),
+  messages: z.array(chatCompletionMessageSchema).min(1),
+  max_tokens: z.number().int().positive().optional(),
+  temperature: z.number().optional(),
+  top_p: z.number().optional(),
+  stop: z.union([z.string(), z.array(z.string())]).optional(),
+}).strict();
+
+function stringifyMessageContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) return JSON.stringify(content);
+  if (content == null) return "";
+  return String(content);
+}
+
+// Approved model lane — the false-done guard judge is the only intended caller.
+const APPROVED_CHAT_MODEL = "gpt-5.4";
+
+function buildCodexPrompt(messages: Array<{ role: string; content: unknown }>): string {
+  const transcript = messages
+    .map((message) => `${message.role.toUpperCase()}:\n${stringifyMessageContent(message.content)}`)
+    .join("\n\n");
+  return [
+    "You are an OpenAI-compatible chat completion backend for Paperclip.",
+    "Answer the latest user request directly.",
+    "If the request asks for JSON, return only valid JSON.",
+    "",
+    transcript,
+  ].join("\n");
+}
+
+interface ChatCompletionControls {
+  max_tokens?: number;
+  temperature?: number;
+  top_p?: number;
+  stop?: string | string[];
+}
+
+async function runCodexChatCompletion(input: {
+  model: string;
+  messages: Array<{ role: string; content: unknown }>;
+  controls?: ChatCompletionControls;
+  signal?: AbortSignal;
+}): Promise<{ content: string; promptTokens: number; completionTokens: number }> {
+  const here = new URL(".", import.meta.url);
+  const repoRoot = new URL("../../../", here).pathname;
+
+  const codexArgs = ["exec", "--json", "--model", input.model, "-"];
+
+  // Pass the AbortSignal so Node.js can auto-SIGKILL the child when the
+  // signal is aborted.  Omit the key when no signal is provided so spawn
+  // behaves as if the option were absent.
+  const spawnOpts: {
+    cwd: string;
+    env: typeof process.env;
+    stdio: ["pipe", "pipe", "pipe"];
+    signal?: AbortSignal;
+  } = {
+    cwd: repoRoot,
+    env: process.env,
+    stdio: ["pipe", "pipe", "pipe"],
+  };
+  if (input.signal) {
+    spawnOpts.signal = input.signal;
+  }
+
+  const proc = spawn("codex", codexArgs, spawnOpts);
+
+  const stdoutChunks: string[] = [];
+  const stderrChunks: string[] = [];
+  const prompt = buildCodexPrompt(input.messages);
+
+  proc.stdin.write(prompt);
+  proc.stdin.end();
+
+  proc.stdout.on("data", (chunk: Buffer) => {
+    stdoutChunks.push(chunk.toString("utf8"));
+  });
+  proc.stderr.on("data", (chunk: Buffer) => {
+    stderrChunks.push(chunk.toString("utf8"));
+  });
+
+  // Secondary SIGKILL cleanup for abort signals that fire after the process
+  // has already exited — guards against the race where Promise.race resolves
+  // and then the signal fires before we tear down.
+  if (input.signal) {
+    input.signal.addEventListener("abort", () => {
+      proc.kill("SIGKILL");
+    });
+  }
+
+  const closeArgs = await Promise.race([
+    once(proc, "close"),
+    once(proc, "error").then(([err]) => {
+      throw err;
+    }),
+  ]) as [number | null, NodeJS.Signals | null];
+
+  const exitCode = closeArgs[0];
+  const stdout = stdoutChunks.join("");
+  const stderr = stderrChunks.join("");
+  if (exitCode !== 0) {
+    throw new Error(
+      stderr.trim() || `codex exec exited with code ${exitCode ?? "unknown"}`,
+    );
+  }
+
+  let content = "";
+  let promptTokens = 0;
+  let completionTokens = 0;
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    try {
+      const event = JSON.parse(line) as { type?: string; item?: { type?: string; text?: unknown }; usage?: Record<string, unknown> };
+      if (event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string") {
+        content = event.item.text.trim();
+      } else if (event.type === "turn.completed" && event.usage) {
+        const usage = event.usage;
+        const inputTokens = Number(usage.input_tokens ?? 0);
+        const outputTokens = Number(usage.output_tokens ?? 0);
+        if (Number.isFinite(inputTokens)) promptTokens = Math.max(0, Math.floor(inputTokens));
+        if (Number.isFinite(outputTokens)) completionTokens = Math.max(0, Math.floor(outputTokens));
+      }
+    } catch (parseErr) {
+      throw new Error(
+        `codex output line is not valid JSON: ${JSON.stringify(line)} — ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
+      );
+    }
+  }
+
+  if (!content) {
+    throw new Error(stderr.trim() || "codex exec returned no assistant message");
+  }
+
+  return { content, promptTokens, completionTokens };
+}
+
+export type LlmRoutesOptions = {
+  /**
+   * Override the default chat-gateway rate limiter (used by tests).
+   * Defaults to a 30-req / 60s sliding window per actor.
+   */
+  chatRateLimiter?: ChatGatewayRateLimiter;
+};
+
+export function llmRoutes(db: Db, opts: LlmRoutesOptions = {}) {
   const router = Router();
   const agentsSvc = agentService(db);
+  const chatRateLimiter = opts.chatRateLimiter ?? createChatGatewayRateLimiter();
 
   async function assertCanRead(req: Request) {
     if (req.actor.type === "board") return;
@@ -29,6 +195,163 @@ export function llmRoutes(db: Db) {
       throw forbidden("Missing permission to read agent configuration reflection");
     }
   }
+
+  /**
+   * Chat gateway auth gate.
+   *
+   * Intended caller: the false-done-guard judge running inside this same
+   * Paperclip server (server/src/services/false-done-guard.ts:242), which
+   * authenticates with the long-lived `PAPERCLIP_API_KEY` service key.
+   *
+   * That call path produces a board actor whose `isInstanceAdmin` flag is
+   * derived from the API key's owner — see middleware/auth.ts:115-126. We
+   * therefore restrict this endpoint to admin board actors OR agents with the
+   * `canCreateAgents` permission (the same `hasCreatePermission` precedent
+   * used by `assertCanRead` above for the agent-configuration reflection).
+   *
+   * Anonymous and non-admin authenticated actors are rejected with 403.
+   *
+   * Rate limiting: callers that pass this gate are additionally throttled
+   * by `chatRateLimiter` (default 30 req / 60s per actor). This is
+   * defense-in-depth — the intended caller is the server-side judge, so a
+   * legitimate admin should never hit the ceiling, but a leaked admin key
+   * or a misbehaving agent cannot spawn unlimited codex runs.
+   */
+  function assertCanUseChatGateway(req: Request) {
+    const actor = req.actor as {
+      type: string;
+      isInstanceAdmin?: boolean;
+      agentId?: string;
+      role?: string;
+      permissions?: Record<string, unknown> | null;
+    };
+    if (actor.type === "none") {
+      throw forbidden("Authenticated Paperclip access required");
+    }
+    if (actor.type === "agent") {
+      if (
+        !actor.role ||
+        !hasCreatePermission({ role: actor.role, permissions: actor.permissions ?? null })
+      ) {
+        throw forbidden(
+          "Agent is missing the canCreateAgents permission required to use the chat gateway",
+        );
+      }
+      return;
+    }
+    if (!actor.isInstanceAdmin) {
+      throw forbidden("Instance admin permission required to use the chat gateway");
+    }
+  }
+
+  function chatGatewayRateLimitActor(req: Request): {
+    actorType: "agent" | "board";
+    actorId: string;
+  } | null {
+    const actor = req.actor as {
+      type: string;
+      isInstanceAdmin?: boolean;
+      agentId?: string;
+    };
+    if (actor.type === "agent") {
+      return actor.agentId
+        ? { actorType: "agent", actorId: actor.agentId }
+        : null;
+    }
+    if (actor.type === "board" && actor.isInstanceAdmin) {
+      return { actorType: "board", actorId: "instance-admin" };
+    }
+    return null;
+  }
+
+  router.post("/chat/completions", async (req, res, next) => {
+    try {
+      assertCanUseChatGateway(req);
+      const rateLimitActor = chatGatewayRateLimitActor(req);
+      if (rateLimitActor) {
+        const rateLimit = chatRateLimiter.consume(rateLimitActor);
+        res.setHeader("X-RateLimit-Limit", String(rateLimit.limit));
+        res.setHeader(
+          "X-RateLimit-Remaining",
+          String(rateLimit.remaining),
+        );
+        if (!rateLimit.allowed) {
+          res.setHeader("Retry-After", String(rateLimit.retryAfterSeconds));
+          res.status(429).json({
+            error: "Chat gateway rate limit exceeded",
+            retryAfterSeconds: rateLimit.retryAfterSeconds,
+          });
+          return;
+        }
+      }
+      const body = chatCompletionRequestSchema.parse(req.body);
+
+      // Constrain to the approved lane only — widen only with explicit review.
+      if (body.model !== APPROVED_CHAT_MODEL) {
+        res.status(400).json({
+          error: `Model not supported`,
+          detail: `Only '${APPROVED_CHAT_MODEL}' is supported on this endpoint.`,
+        });
+        return;
+      }
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 60_000);
+
+      const completion = await runCodexChatCompletion({
+        model: body.model,
+        messages: body.messages,
+        controls: {
+          max_tokens: body.max_tokens,
+          temperature: body.temperature,
+          top_p: body.top_p,
+          stop: body.stop,
+        },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timer);
+
+      res.json({
+        id: `chatcmpl-${randomUUID()}`,
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model: body.model,
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: completion.content },
+            finish_reason: "stop",
+          },
+        ],
+        usage: {
+          prompt_tokens: completion.promptTokens,
+          completion_tokens: completion.completionTokens,
+          total_tokens: completion.promptTokens + completion.completionTokens,
+        },
+      });
+    } catch (err) {
+      if (err instanceof ZodError) {
+        res.status(400).json({
+          error: "Invalid chat completion request",
+          details: err.issues.map((issue) => issue.message),
+        });
+        return;
+      }
+      // Log caught errors; don't let internal failures masquerade as client errors.
+      logger.error({ error: err }, "Chat completion error");
+      if (err instanceof HttpError) {
+        next(err);
+        return;
+      }
+      // Surface the underlying error message to the caller as a 500 so
+      // operators get actionable detail (e.g. "codex exec exited with code 1"
+      // or "codex output line is not valid JSON: ...").  Internal stack
+      // traces remain in the log line above, not in the response body.
+      const message = err instanceof Error ? err.message : String(err);
+      next(new HttpError(500, message));
+    }
+  });
 
   router.get("/llms/agent-configuration.txt", async (req, res) => {
     await assertCanRead(req);
