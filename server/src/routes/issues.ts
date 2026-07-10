@@ -6810,7 +6810,8 @@ export function issueRoutes(
       }
 
       const becameDone = existing.status !== "done" && issue.status === "done";
-      if (becameDone) {
+      const becameCancelled = existing.status !== "cancelled" && issue.status === "cancelled";
+      if (becameDone || becameCancelled) {
         const dependents = await svc.listWakeableBlockedDependents(issue.id);
         for (const dependent of dependents) {
           await addDependencyResolvedWakeup({
@@ -8292,7 +8293,8 @@ export function issueRoutes(
       }
 
       const becameDone = issueBeforeCommentDecision.status !== "done" && currentIssue.status === "done";
-      if (becameDone) {
+      const becameCancelled = issueBeforeCommentDecision.status !== "cancelled" && currentIssue.status === "cancelled";
+      if (becameDone || becameCancelled) {
         const dependents = await svc.listWakeableBlockedDependents(currentIssue.id);
         for (const dependent of dependents) {
           await addDependencyResolvedWakeup({

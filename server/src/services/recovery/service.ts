@@ -3745,6 +3745,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     cutoff: Date,
     updatedAtByIssueKey: Map<string, Date>,
   ) {
+    if (finding.state === "blocked_by_cancelled_issue") return true;
     const latestUpdatedAt = latestDependencyUpdatedAtForLivenessFinding(finding, updatedAtByIssueKey);
     return Boolean(latestUpdatedAt && latestUpdatedAt >= cutoff);
   }
