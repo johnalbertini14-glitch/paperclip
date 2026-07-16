@@ -371,6 +371,42 @@ describe("DiscoveryGrid Studio entry points", () => {
 
     expect(onOpenCard).not.toHaveBeenCalled();
   });
+
+  it("does not offer move actions for bundled skills", async () => {
+    const card = {
+      key: "bundled-skill",
+      skillId: "skill-1",
+      folderId: "bundled-folder",
+      catalogRef: null,
+      name: "Bundled Skill",
+      slug: "bundled-skill",
+      author: "Paperclip",
+      version: null,
+      tagline: null,
+      description: null,
+      categories: [],
+      iconUrl: null,
+      color: null,
+      starCount: 0,
+      agentCount: 0,
+      forkCount: 0,
+      installed: true,
+      required: true,
+      forkedFrom: false,
+      updatedAt: 0,
+    };
+    const node = await renderDiscoveryGrid({
+      cards: [card],
+      totalCount: 1,
+      folderResult: { kind: "skill", folders: [], allCount: 1, unfiledCount: 0 },
+      onMoveCard: vi.fn(),
+      onCreateFolderAndMoveCard: vi.fn(),
+      onOpenMoveCard: vi.fn(),
+    });
+
+    expect(node.querySelector('[aria-label="More actions for Bundled Skill"]')).toBeNull();
+    expect(node.textContent).not.toContain("Move to folder");
+  });
 });
 
 describe("skillStudioNewRoute", () => {

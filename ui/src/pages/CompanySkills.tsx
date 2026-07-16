@@ -844,7 +844,7 @@ function SkillCard({
             </span>
           );
         })()}
-        {card.installed && folders && onMove && onCreateFolderAndMove ? (
+        {card.installed && !card.required && folders && onMove && onCreateFolderAndMove ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
