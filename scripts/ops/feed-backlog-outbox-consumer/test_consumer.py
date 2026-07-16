@@ -602,10 +602,16 @@ class ExpiredLeaseDuringDispatchRegressionTests(unittest.TestCase):
         self.assertEqual(collection.doc["deliveryState"], consumer.DELIVERY_STATE_ACKNOWLEDGED)
         self.assertEqual(collection.doc["externalIssueId"], "issue-race")
 
-    def test_dispatch_started_blocks_reclaim_until_grace_period_elapses(self):
-        """Once a worker has recorded dispatchStartedAt, an ordinary claim
-        lease expiry alone must not let another worker reclaim — only the
-        much longer DISPATCH_RECLAIM_GRACE_SECONDS grace period does."""
+    def test_dispatch_started_blocks_reclaim_forever_no_timer_reclaims_it(self):
+        """Once a worker has recorded dispatchStartedAt, NO elapsed amount
+        of time lets another worker reclaim automatically — a timer cannot
+        tell "the owner crashed before its HTTP call reached the server"
+        apart from "the owner paused and its HTTP call is still about to
+        land", and reclaiming in the latter case is exactly what lets two
+        workers both make a real create_issue call for the same intent
+        (REVA-27715 review round 6: a reconcile-after-the-fact cleanup does
+        not satisfy the no-second-create requirement, so the second create
+        must never happen in the first place)."""
         collection = FakeIntentCollection(
             {"id": "intent-1", "workspaceId": "workspace-1", "deliveryState": consumer.DELIVERY_STATE_PENDING}
         )
@@ -613,15 +619,58 @@ class ExpiredLeaseDuringDispatchRegressionTests(unittest.TestCase):
         self.assertIsNotNone(claimed_a)
         self.assertTrue(consumer.mark_dispatch_started(collection, "intent-1", "workspace-1", "worker-a"))
 
-        # Ordinary lease expired, but dispatch just started: B must not reclaim.
+        # Ordinary lease expired, dispatch started: B must not reclaim.
         collection.doc["claimLeaseExpiresAt"] = "1970-01-01T00:00:00+00:00"
         self.assertIsNone(consumer.claim_intent(collection, "intent-1", "workspace-1", "worker-b"))
 
-        # Dispatch started long enough ago (older than the grace period): B may reclaim.
+        # Dispatch started arbitrarily long ago: still no automatic reclaim,
+        # no matter how old dispatchStartedAt is -- there is no grace period
+        # left to "elapse".
         collection.doc["dispatchStartedAt"] = "1970-01-01T00:00:00+00:00"
+        self.assertIsNone(consumer.claim_intent(collection, "intent-1", "workspace-1", "worker-b"))
+        self.assertEqual(collection.doc["claimOwner"], "worker-a")
+
+    def test_force_release_stuck_dispatch_requires_operator_note_and_makes_intent_reclaimable(self):
+        """The only sanctioned way to recover an intent stuck with
+        dispatchStartedAt set is a deliberate, evidenced operator call —
+        never a timeout."""
+        collection = FakeIntentCollection(
+            {"id": "intent-1", "workspaceId": "workspace-1", "deliveryState": consumer.DELIVERY_STATE_PENDING}
+        )
+        consumer.claim_intent(collection, "intent-1", "workspace-1", "worker-a")
+        consumer.mark_dispatch_started(collection, "intent-1", "workspace-1", "worker-a")
+
+        with self.assertRaises(ValueError):
+            consumer.force_release_stuck_dispatch(collection, "intent-1", "workspace-1", "worker-a", "   ")
+        self.assertIsNone(consumer.claim_intent(collection, "intent-1", "workspace-1", "worker-b"))
+
+        released = consumer.force_release_stuck_dispatch(
+            collection,
+            "intent-1",
+            "workspace-1",
+            "worker-a",
+            "confirmed via marker search: no issue exists for this idempotency key yet",
+        )
+        self.assertTrue(released)
+        self.assertNotIn("claimOwner", collection.doc)
+        self.assertNotIn("dispatchStartedAt", collection.doc)
+
         claimed_b = consumer.claim_intent(collection, "intent-1", "workspace-1", "worker-b")
         self.assertIsNotNone(claimed_b)
         self.assertEqual(collection.doc["claimOwner"], "worker-b")
+
+    def test_force_release_stuck_dispatch_scoped_to_expected_owner(self):
+        collection = FakeIntentCollection(
+            {"id": "intent-1", "workspaceId": "workspace-1", "deliveryState": consumer.DELIVERY_STATE_PENDING}
+        )
+        consumer.claim_intent(collection, "intent-1", "workspace-1", "worker-a")
+        consumer.mark_dispatch_started(collection, "intent-1", "workspace-1", "worker-a")
+
+        released = consumer.force_release_stuck_dispatch(
+            collection, "intent-1", "workspace-1", "worker-wrong", "note"
+        )
+        self.assertFalse(released)
+        self.assertEqual(collection.doc["claimOwner"], "worker-a")
 
 
 class ProcessIntentLostClaimTests(unittest.TestCase):
@@ -764,54 +813,18 @@ def make_store_backed_client(store: FakeIssueStore) -> MagicMock:
     return client
 
 
-def _stall_a_after_fence_then_run_b_to_completion(client_b, config, intent, test_case):
-    """Builds the mark_dispatch_started replacement shared by every
-    round-5 race regression below: call the real fencing write (so worker A
-    legitimately still holds the claim at that instant, matching the review
-    comment's own description of the race), then simulate A being paused
-    for far longer than DISPATCH_RECLAIM_GRACE_SECONDS before it reaches the
-    very next line (the actual remote mutation) by force-expiring both the
-    ordinary lease and the dispatch grace, and running worker B's entire
-    process_intent to completion in the gap."""
-    real_mark_dispatch_started = consumer.mark_dispatch_started
+class NoSecondCreateRegressionTests(unittest.TestCase):
+    """REVA-27715 review round 6 finding: the round-5 design let worker B
+    fully reclaim and dispatch once worker A's stall outlasted
+    DISPATCH_RECLAIM_GRACE_SECONDS, producing a second real create_issue
+    call that reconciliation only cleaned up afterward -- which the review
+    holds does not satisfy "no second create". Since `claim_intent` no
+    longer has any timer-based path to reclaim an intent whose
+    dispatchStartedAt is set, this must now be impossible: proves worker B
+    cannot claim, dispatch, or call create_issue at all while worker A's
+    dispatch is outstanding, no matter how long ago it started."""
 
-    def fence_then_let_b_fully_run(coll, intent_id, workspace_id, owner):
-        result = real_mark_dispatch_started(coll, intent_id, workspace_id, owner)
-        # The patch below is process-wide for the duration of the `with`
-        # block, so worker B's own _fence_dispatch call (inside the nested
-        # process_intent run just below) re-enters this same function too.
-        # Only worker A's call should trigger the stall-and-let-B-run
-        # behavior; B's own fencing call must fall straight through to the
-        # real implementation or this would recurse into itself forever.
-        if owner != "worker-a":
-            return result
-        coll.doc["claimLeaseExpiresAt"] = "1970-01-01T00:00:00+00:00"
-        coll.doc["dispatchStartedAt"] = "1970-01-01T00:00:00+00:00"
-        outcome_b = consumer.process_intent(client_b, config, coll, intent, owner="worker-b")
-        test_case.assertEqual(outcome_b, "acknowledged")
-        return result
-
-    return fence_then_let_b_fully_run
-
-
-class PostFenceResumeRaceRegressionTests(unittest.TestCase):
-    """REVA-27715 review round 5 finding: `_fence_dispatch` re-verifies
-    ownership immediately before the remote call, but the gap between that
-    write returning and the remote call actually executing can itself be
-    stalled arbitrarily long by a process pause -- no fixed
-    DISPATCH_RECLAIM_GRACE_SECONDS can close that to zero probability
-    without provider-side atomic fencing (verified unavailable on the
-    Paperclip issues API; adding it would be a platform-code change outside
-    this ticket's Ops-only scope). These regressions simulate exactly that:
-    worker A passes the fence, is paused long enough for worker B to fully
-    reclaim/dispatch/acknowledge, then A resumes and still issues its own
-    remote mutation. What must be proven is not that A's call never fires
-    (it does -- that is the honestly-unpreventable part) but that the
-    SYSTEM converges to a safe state: for create/escalation, at most one
-    live issue survives (reconcile_created_issue); for update/supersession,
-    accounting is never double-acknowledged and nothing raises."""
-
-    def test_create_race_reconciliation_closes_worker_as_duplicate_and_reports_canonical(self):
+    def test_worker_b_cannot_claim_or_create_while_worker_as_dispatch_is_outstanding(self):
         config = make_config()
         store = FakeIssueStore()
         collection = FakeIntentCollection(
@@ -819,134 +832,136 @@ class PostFenceResumeRaceRegressionTests(unittest.TestCase):
         )
         intent = make_create_intent(idempotency_key="create:fp-recon:0")
         client_b = make_store_backed_client(store)
-        client_a = make_store_backed_client(store)
 
-        with patch.object(
-            consumer,
-            "mark_dispatch_started",
-            side_effect=_stall_a_after_fence_then_run_b_to_completion(client_b, config, intent, self),
-        ):
-            outcome_a = consumer.process_intent(client_a, config, collection, intent, owner="worker-a")
+        # Worker A reaches the fence (legitimately claims and records
+        # dispatchStartedAt) and then, for the purposes of this test, never
+        # completes its own remote call -- modeling a crash or an
+        # indefinite pause. No amount of elapsed time should matter.
+        consumer.claim_intent(collection, "intent-1", "workspace-1", "worker-a")
+        self.assertTrue(consumer.mark_dispatch_started(collection, "intent-1", "workspace-1", "worker-a"))
+        collection.doc["claimLeaseExpiresAt"] = "1970-01-01T00:00:00+00:00"
+        collection.doc["dispatchStartedAt"] = "1970-01-01T00:00:00+00:00"
 
-        # A's own create_issue call genuinely fires -- the physical HTTP
-        # race is not preventable without provider-side fencing. What must
-        # hold is the post-hoc invariant: exactly one issue remains open.
-        client_a.create_issue.assert_called_once()
-        client_b.create_issue.assert_called_once()
-        self.assertEqual(outcome_a, "lost_claim")
-        open_issues = [record for record in store.issues.values() if record["status"] != "done"]
-        self.assertEqual(len(open_issues), 1)
-        self.assertEqual(open_issues[0]["id"], "issue-1")  # B created first, during A's stall
-        self.assertEqual(store.issues["issue-2"]["status"], "done")
-        self.assertEqual(collection.doc["deliveryState"], consumer.DELIVERY_STATE_ACKNOWLEDGED)
-        self.assertEqual(collection.doc["externalIssueId"], "issue-1")
+        outcome_b = consumer.process_intent(client_b, config, collection, intent, owner="worker-b")
 
-    def test_escalation_race_reconciliation_closes_worker_as_duplicate(self):
+        self.assertEqual(outcome_b, "skipped_claimed")
+        client_b.create_issue.assert_not_called()
+        self.assertEqual(collection.doc["claimOwner"], "worker-a")
+        self.assertEqual(collection.doc["deliveryState"], consumer.DELIVERY_STATE_PENDING)
+
+    def test_operator_release_then_replay_reconciles_a_pre_existing_duplicate(self):
+        """End-to-end recovery path: an operator confirms out-of-band that
+        worker A's create never landed remotely (simulated here by a
+        pre-existing duplicate from an unrelated source, e.g. a manual
+        override, still needing cleanup), force-releases the stuck claim,
+        and a subsequent run correctly reconciles down to one live issue
+        via the marker-hit replay branch (REVA-27715 review round 6 finding
+        #2: replay must reconcile too, not only the freshly-created path)."""
         config = make_config()
         store = FakeIssueStore()
+        # Seed two pre-existing "duplicate" issues sharing one idempotency
+        # marker, standing in for a duplicate that already exists in real
+        # persistence before this worker ever touches the intent.
+        store.create_issue({"description": "first\n<!-- outbox-intent:create:fp-recon:0 -->"})
+        store.create_issue({"description": "second\n<!-- outbox-intent:create:fp-recon:0 -->"})
         collection = FakeIntentCollection(
-            {"id": "intent-4", "workspaceId": "workspace-1", "deliveryState": consumer.DELIVERY_STATE_PENDING}
+            {"id": "intent-1", "workspaceId": "workspace-1", "deliveryState": consumer.DELIVERY_STATE_PENDING}
         )
+        intent = make_create_intent(idempotency_key="create:fp-recon:0")
+
+        consumer.claim_intent(collection, "intent-1", "workspace-1", "worker-a")
+        consumer.mark_dispatch_started(collection, "intent-1", "workspace-1", "worker-a")
+        released = consumer.force_release_stuck_dispatch(
+            collection,
+            "intent-1",
+            "workspace-1",
+            "worker-a",
+            "confirmed via marker search: issue-1/issue-2 both already exist for this key",
+        )
+        self.assertTrue(released)
+
+        client_b = make_store_backed_client(store)
+        outcome_b = consumer.process_intent(client_b, config, collection, intent, owner="worker-b")
+
+        self.assertEqual(outcome_b, "acknowledged")
+        client_b.create_issue.assert_not_called()  # found via marker, never re-created
+        open_issues = [record for record in store.issues.values() if record["status"] != "done"]
+        self.assertEqual(len(open_issues), 1)
+        self.assertEqual(open_issues[0]["id"], "issue-1")
+        self.assertEqual(store.issues["issue-2"]["status"], "done")
+        self.assertEqual(collection.doc["externalIssueId"], "issue-1")
+
+
+class ReplayReconciliationTests(unittest.TestCase):
+    """REVA-27715 review round 6 finding #2: dispatch_create/
+    dispatch_escalation must call reconcile_created_issue on the
+    marker-hit ("existing found") replay branch too, not only on the
+    freshly-created branch -- otherwise a duplicate that already existed
+    before this worker's run (e.g. left over from before this fix, or a
+    manual data correction) is silently returned as-is forever instead of
+    being cleaned up the next time this idempotency key is touched."""
+
+    def test_dispatch_create_reconciles_duplicate_found_on_replay(self):
+        config = make_config()
+        client = MagicMock()
+        client.search_issues.return_value = [
+            {
+                "id": "issue-2",
+                "status": "todo",
+                "description": "...\n<!-- outbox-intent:create:fp-1:0 -->",
+                "createdAt": "2026-01-01T00:05:00+00:00",
+            },
+            {
+                "id": "issue-1",
+                "status": "todo",
+                "description": "...\n<!-- outbox-intent:create:fp-1:0 -->",
+                "createdAt": "2026-01-01T00:01:00+00:00",
+            },
+        ]
+        collection = MagicMock()
+        intent = make_create_intent()
+
+        external_id, status = consumer.dispatch_create(client, config, collection, intent, "worker-a")
+
+        self.assertEqual(external_id, "issue-1")
+        client.create_issue.assert_not_called()
+        client.patch_issue.assert_called_once()
+        self.assertEqual(client.patch_issue.call_args[0][0], "issue-2")
+
+    def test_dispatch_escalation_reconciles_duplicate_found_on_replay(self):
+        config = make_config()
+        client = MagicMock()
+        client.search_issues.return_value = [
+            {
+                "id": "issue-2",
+                "status": "todo",
+                "description": "...\n<!-- outbox-intent:escalation:fp-1:0 -->",
+                "createdAt": "2026-01-01T00:05:00+00:00",
+            },
+            {
+                "id": "issue-1",
+                "status": "todo",
+                "description": "...\n<!-- outbox-intent:escalation:fp-1:0 -->",
+                "createdAt": "2026-01-01T00:01:00+00:00",
+            },
+        ]
+        collection = MagicMock()
         intent = {
             "id": "intent-4",
             "workspaceId": "workspace-1",
-            "idempotencyKey": "escalation:fp-recon:0",
+            "idempotencyKey": "escalation:fp-1:0",
             "intentKind": consumer.INTENT_KIND_ESCALATION,
             "signalType": "risk_signal",
             "payload": {"title": "Escalate", "body": "evidence"},
             "retrospectiveRunId": "run-1",
         }
-        client_b = make_store_backed_client(store)
-        client_a = make_store_backed_client(store)
 
-        with patch.object(
-            consumer,
-            "mark_dispatch_started",
-            side_effect=_stall_a_after_fence_then_run_b_to_completion(client_b, config, intent, self),
-        ):
-            outcome_a = consumer.process_intent(client_a, config, collection, intent, owner="worker-a")
+        external_id, status = consumer.dispatch_escalation(client, config, collection, intent, "worker-a")
 
-        client_a.create_issue.assert_called_once()
-        client_b.create_issue.assert_called_once()
-        self.assertEqual(outcome_a, "lost_claim")
-        open_issues = [record for record in store.issues.values() if record["status"] != "done"]
-        self.assertEqual(len(open_issues), 1)
-        self.assertEqual(open_issues[0]["id"], "issue-1")
-
-    def test_update_race_stale_worker_neither_double_acknowledges_nor_raises(self):
-        config = make_config()
-        collection = FakeIntentCollection(
-            {"id": "intent-2", "workspaceId": "workspace-1", "deliveryState": consumer.DELIVERY_STATE_PENDING}
-        )
-        intent = {
-            "id": "intent-2",
-            "workspaceId": "workspace-1",
-            "idempotencyKey": "update:fp-race:intent-1:run-2",
-            "intentKind": consumer.INTENT_KIND_UPDATE,
-            "payload": {"body": "more evidence"},
-            "targetsExternalIssueId": "issue-1",
-        }
-        client_b = MagicMock()
-        client_b.list_comments.return_value = []
-        client_b.post_comment.return_value = {"id": "comment-b"}
-        client_a = MagicMock()
-        client_a.list_comments.return_value = []
-        client_a.post_comment.return_value = {"id": "comment-a"}
-
-        with patch.object(
-            consumer,
-            "mark_dispatch_started",
-            side_effect=_stall_a_after_fence_then_run_b_to_completion(client_b, config, intent, self),
-        ):
-            outcome_a = consumer.process_intent(client_a, config, collection, intent, owner="worker-a")
-
-        # A's own post_comment call still fires (same physical-race honesty
-        # as create), but this only ever produces a duplicate informational
-        # comment on the SAME already-existing target issue, never a
-        # duplicate issue -- outside this ticket's named HIGH risk. What
-        # must hold: no crash, and A must not double-acknowledge over B.
-        client_a.post_comment.assert_called_once()
-        client_b.post_comment.assert_called_once()
-        self.assertEqual(outcome_a, "lost_claim")
-        self.assertEqual(collection.doc["deliveryState"], consumer.DELIVERY_STATE_ACKNOWLEDGED)
-        self.assertEqual(collection.doc["externalIssueId"], "issue-1")
-
-    def test_supersession_race_stale_worker_neither_double_acknowledges_nor_raises(self):
-        config = make_config()
-        collection = FakeIntentCollection(
-            {"id": "intent-3", "workspaceId": "workspace-1", "deliveryState": consumer.DELIVERY_STATE_PENDING},
-            extra_find_one_result={"id": "intent-1", "externalIssueId": "issue-1"},
-        )
-        intent = {
-            "id": "intent-3",
-            "workspaceId": "workspace-1",
-            "idempotencyKey": "supersession:fp-race:intent-1:run-2",
-            "intentKind": consumer.INTENT_KIND_SUPERSESSION,
-            "supersedesIntentId": "intent-1",
-            "payload": {"resolutionNote": "closed"},
-        }
-        client_b = MagicMock()
-        client_b.list_comments.return_value = []
-        client_b.patch_issue.return_value = {"id": "issue-1", "status": "done"}
-        client_a = MagicMock()
-        client_a.list_comments.return_value = []
-        client_a.patch_issue.return_value = {"id": "issue-1", "status": "done"}
-
-        with patch.object(
-            consumer,
-            "mark_dispatch_started",
-            side_effect=_stall_a_after_fence_then_run_b_to_completion(client_b, config, intent, self),
-        ):
-            outcome_a = consumer.process_intent(client_a, config, collection, intent, owner="worker-a")
-
-        # Patching the same target to "done" twice is idempotent on its
-        # final status -- no duplicate resource, at worst a duplicate
-        # informational comment. Accounting must still be correct.
-        client_a.patch_issue.assert_called_once()
-        client_b.patch_issue.assert_called_once()
-        self.assertEqual(outcome_a, "lost_claim")
-        self.assertEqual(collection.doc["deliveryState"], consumer.DELIVERY_STATE_ACKNOWLEDGED)
-        self.assertEqual(collection.doc["externalIssueId"], "issue-1")
+        self.assertEqual(external_id, "issue-1")
+        client.create_issue.assert_not_called()
+        client.patch_issue.assert_called_once()
+        self.assertEqual(client.patch_issue.call_args[0][0], "issue-2")
 
 
 if __name__ == "__main__":

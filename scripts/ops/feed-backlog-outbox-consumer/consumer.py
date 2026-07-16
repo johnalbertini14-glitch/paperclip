@@ -73,13 +73,17 @@ MAX_DESCRIPTION_CHARS = 20000
 DEFAULT_BATCH_LIMIT = 25
 CLAIM_LEASE_SECONDS = 300
 # Once a worker has recorded that it started a remote dispatch call
-# (`dispatchStartedAt`), no other worker may reclaim the intent until this
-# much longer grace period has elapsed, even if the ordinary claim lease
-# has expired. This is deliberately far larger than any single HTTP call
-# (the Paperclip client uses a 20s timeout) so a live in-flight dispatch is
-# never preempted; a worker that is truly dead still frees the intent for
-# reclaim eventually.
-DISPATCH_RECLAIM_GRACE_SECONDS = 1800
+# (`dispatchStartedAt`), NO automatic, timer-based mechanism may ever
+# reclaim the intent -- a fixed grace period only shrinks the probability
+# of a second worker preempting a still-in-flight call, it cannot make
+# that probability zero, because the gap between "the fence check passed"
+# and "the HTTP call actually executes" can itself be stalled arbitrarily
+# long by a process pause (REVA-27715 review round 6: reconciling a
+# duplicate away after the fact does not satisfy the ticket's
+# no-second-create requirement -- the second create must never happen).
+# An intent stuck with `dispatchStartedAt` set requires a deliberate
+# operator action (`force_release_stuck_dispatch`) to become reclaimable
+# again, not a timeout.
 
 MARKER_TEMPLATE = "<!-- outbox-intent:{key} -->"
 MARKER_RE = re.compile(r"<!-- outbox-intent:(?P<key>\S+?) -->")
@@ -260,31 +264,24 @@ def reconcile_created_issue(
     client: PaperclipClient, idempotency_key: str, created_id: str, created_status: str
 ) -> Tuple[str, str]:
     """Called immediately after a remote create_issue call succeeds in
-    dispatch_create/dispatch_escalation. This is the correctness backstop
-    for REVA-27715 review round 5's finding: no purely time-based fence
-    (mark_dispatch_started's pre-call recheck, DISPATCH_RECLAIM_GRACE_SECONDS)
-    can close the check-then-act gap to zero probability in a single
-    process without cooperation from the remote side, because the gap
-    between "the fence check passed" and "the HTTP call actually executes"
-    can itself be stalled arbitrarily long by process/scheduler pauses --
-    any fixed grace period only shrinks that window, it cannot prove it
-    away. The Paperclip issues API was verified (via this module's own
-    PaperclipClient, docs, and prior review evidence) to expose no
-    client-supplied idempotency/dedupe key on create; adding one would be a
-    platform-code change outside this ticket's Ops-only scope
-    (feed-backlog-outbox-consumer script), so provider-enforced fencing is
-    not an available option here.
-
-    Instead this makes the OUTCOME deterministic rather than the timing:
-    re-query the real remote state for every issue carrying this exact
-    idempotency marker right after our own create call. If a race actually
-    produced more than one, the earliest-created issue is the canonical
-    winner and every other one is immediately closed with a comment
-    pointing at the canonical id. This guarantees at most one *live* issue
-    for a given idempotency key survives a dispatch cycle regardless of how
-    many workers' HTTP calls actually landed, which is the practically
-    achievable form of "a reclaimed worker cannot leave a lasting
-    duplicate" when true prevention isn't available."""
+    dispatch_create/dispatch_escalation, AND on the marker-hit replay branch
+    of both (a prior run, possibly this same worker resuming after an
+    ambiguous crash, already found an existing issue for this idempotency
+    key). This is defense-in-depth, not the primary duplicate-prevention
+    mechanism: since REVA-27715 review round 6, `claim_intent` never
+    reclaims an intent whose `dispatchStartedAt` is set (see its docstring)
+    except via a deliberate operator call to `force_release_stuck_dispatch`,
+    which is what actually stops a second worker from ever making a second
+    real create_issue call for the same intent. This function's job is to
+    converge state if a duplicate somehow still exists anyway -- e.g. an
+    operator force-released a stuck dispatch before confirming remote state
+    correctly, a bug predates this fix, or an intent was reprocessed after a
+    manual data correction. It re-queries the real remote state for every
+    issue carrying this exact idempotency marker. If more than one exists,
+    the earliest-created issue is the canonical winner and every other one
+    is immediately closed with a comment pointing at the canonical id, so at
+    most one *live* issue for a given idempotency key survives being touched
+    by this consumer again, regardless of how the duplicate arose."""
     candidates = [
         candidate
         for candidate in client.search_issues(idempotency_key)
@@ -393,7 +390,16 @@ def dispatch_create(
 
     existing = find_existing_by_marker(client, idempotency_key)
     if existing is not None:
-        return existing["id"], existing.get("status", "unknown")
+        # A replay path (e.g. resuming after an ambiguous crash whose
+        # outcome was unknown) must reconcile too, not just the
+        # freshly-created path below -- otherwise a duplicate left over
+        # from before this worker ever ran (concurrent dispatch, a manual
+        # force-release, or any other source) is silently ignored forever
+        # instead of being closed on the very next cycle that touches this
+        # idempotency key (REVA-27715 review round 6 finding).
+        return reconcile_created_issue(
+            client, idempotency_key, existing["id"], existing.get("status", "unknown")
+        )
 
     title = str(payload.get("title") or intent.get("signalType") or "Feed backlog item")[:200]
     body: Dict[str, Any] = {
@@ -469,7 +475,11 @@ def dispatch_escalation(
 
     existing = find_existing_by_marker(client, idempotency_key)
     if existing is not None:
-        return existing["id"], existing.get("status", "unknown")
+        # See dispatch_create's identical comment: the replay path must
+        # reconcile too, not just the freshly-created path below.
+        return reconcile_created_issue(
+            client, idempotency_key, existing["id"], existing.get("status", "unknown")
+        )
 
     title = str(payload.get("title") or f"[Feed Escalation] {intent.get('signalType', 'unknown')}")[:200]
     body: Dict[str, Any] = {
@@ -512,31 +522,31 @@ def claim_intent(
     finding #2). Matches only if the intent is still pending AND either:
     unclaimed; or its previous claim's ordinary lease has expired AND that
     worker never reached the point of starting a remote dispatch call
-    (`dispatchStartedAt` unset); or a remote dispatch was started but
-    DISPATCH_RECLAIM_GRACE_SECONDS have passed since (covers a worker that
-    genuinely crashed mid-dispatch). This last condition is what stops a
-    worker whose ordinary claim lease merely expired *during* an in-flight
-    remote call from being preempted by a reclaim — see `_fence_dispatch`
-    for the other half of this protection (REVA-27715 review round 4
-    finding #1). The atomicity comes from Mongo's single-document
-    find_one_and_update, not from any read-then-write in this process."""
+    (`dispatchStartedAt` unset). Once `dispatchStartedAt` is set, this
+    function will NEVER match that intent again on its own, however long
+    ago that was: a timer cannot distinguish "the owning worker crashed
+    before its HTTP call reached the server" from "the owning worker paused
+    and its HTTP call is still going to land any moment", and matching in
+    the latter case is exactly what lets a second worker also fire a real
+    remote mutation for the same intent (REVA-27715 review round 6 finding
+    -- reconciling the resulting duplicate away afterward does not satisfy
+    the ticket's no-second-create requirement). An intent stuck with
+    `dispatchStartedAt` set is left pending-but-unclaimable until
+    `force_release_stuck_dispatch` is called deliberately by an operator who
+    has confirmed out-of-band (e.g. via a marker search against live
+    Paperclip state) that reclaiming it is safe. The atomicity of the claim
+    itself comes from Mongo's single-document find_one_and_update, not from
+    any read-then-write in this process."""
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
-    dispatch_grace_cutoff_iso = (now - timedelta(seconds=DISPATCH_RECLAIM_GRACE_SECONDS)).isoformat()
     lease_expires_at = (now + timedelta(seconds=lease_seconds)).isoformat()
     unclaimed = {"$or": [{"claimOwner": {"$exists": False}}, {"claimOwner": None}]}
-    dispatch_not_in_flight = {
-        "$or": [
-            {"dispatchStartedAt": {"$exists": False}},
-            {"dispatchStartedAt": None},
-            {"dispatchStartedAt": {"$lt": dispatch_grace_cutoff_iso}},
-        ]
-    }
+    dispatch_never_started = {"$or": [{"dispatchStartedAt": {"$exists": False}}, {"dispatchStartedAt": None}]}
     # Sibling top-level keys in a Mongo filter document are implicitly
     # ANDed, so merging the lease-expiry field predicate with the
-    # dispatch_not_in_flight $or clause here has the same effect as an
+    # dispatch_never_started $or clause here has the same effect as an
     # explicit $and without needing one.
-    lease_expired_and_reclaimable = {"claimLeaseExpiresAt": {"$lt": now_iso}, **dispatch_not_in_flight}
+    lease_expired_and_reclaimable = {"claimLeaseExpiresAt": {"$lt": now_iso}, **dispatch_never_started}
     return collection.find_one_and_update(
         {
             "id": intent_id,
@@ -546,7 +556,6 @@ def claim_intent(
         },
         {
             "$set": {"claimOwner": owner, "claimedAt": now_iso, "claimLeaseExpiresAt": lease_expires_at},
-            "$unset": {"dispatchStartedAt": ""},
         },
         return_document=ReturnDocument.AFTER,
     )
@@ -580,6 +589,46 @@ def release_claim(collection: Collection, intent_id: str, workspace_id: str, own
         {"id": intent_id, "workspaceId": workspace_id, "claimOwner": owner},
         {"$unset": {"claimOwner": "", "claimedAt": "", "claimLeaseExpiresAt": "", "dispatchStartedAt": ""}},
     )
+
+
+def force_release_stuck_dispatch(
+    collection: Collection, intent_id: str, workspace_id: str, expected_owner: str, operator_note: str
+) -> bool:
+    """The deliberate, human-invoked recovery path for an intent whose
+    `dispatchStartedAt` is set and will therefore never be reclaimed
+    automatically by `claim_intent` (see its docstring) -- its owning
+    worker crashed or hung somewhere between starting the remote dispatch
+    and this consumer's next successful cycle. This function does not
+    itself contact the Paperclip API or decide whether reclaiming is safe;
+    the caller must have already confirmed real remote state out-of-band
+    (typically: search Paperclip for the intent's idempotency marker and
+    note whether an issue already exists) and record that confirmation in
+    `operator_note`, which is required to be non-empty so a stuck claim can
+    never be cleared silently. Scoped to `expected_owner` still holding the
+    claim, matching the scoping discipline used everywhere else in this
+    module, so a second concurrent force-release attempt is a safe no-op
+    rather than a double-clear."""
+    if not operator_note.strip():
+        raise ValueError("operator_note is required to force-release a stuck dispatch claim")
+    result = collection.update_one(
+        {
+            "id": intent_id,
+            "workspaceId": workspace_id,
+            "claimOwner": expected_owner,
+            "dispatchStartedAt": {"$exists": True, "$ne": None},
+        },
+        {
+            "$unset": {"claimOwner": "", "claimedAt": "", "claimLeaseExpiresAt": "", "dispatchStartedAt": ""},
+            "$push": {
+                "forceReleaseLog": {
+                    "releasedOwner": expected_owner,
+                    "note": safe_error_summary(operator_note),
+                    "at": _iso_now(),
+                }
+            },
+        },
+    )
+    return result.matched_count > 0
 
 
 def mark_acknowledged(

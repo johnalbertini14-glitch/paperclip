@@ -93,14 +93,18 @@ Two mechanisms close this together:
    `False`, and the caller raises `LostClaimError` — the remote mutation is
    never attempted. `process_intent` reports this as a distinct
    `lost_claim` outcome.
-2. **Dispatch-aware reclaim grace period.** Once `dispatchStartedAt` is
-   set, `claim_intent` will not let another worker reclaim on an expired
-   ordinary lease alone — it additionally requires
-   `DISPATCH_RECLAIM_GRACE_SECONDS` (30 minutes, far longer than any single
-   HTTP call) to have elapsed since dispatch began. This means a worker
-   whose lease merely expires *while* an in-flight remote call is still
-   running cannot be preempted mid-call; only a worker that is genuinely
-   dead eventually frees the intent for reclaim.
+2. **No timer-based reclaim once dispatch has started, ever.** Once
+   `dispatchStartedAt` is set, `claim_intent` will never match that intent
+   again on its own — not after any elapsed time. A fixed grace period
+   (the round-5 design) only shrinks the probability of a second worker
+   preempting a still-in-flight call; it cannot make that probability
+   zero, because the gap between "the fence check passed" and "the HTTP
+   call actually executes" can itself be stalled arbitrarily long by a
+   process pause, and no timer can tell "the owner crashed before its call
+   reached the server" apart from "the owner paused and its call is still
+   about to land". Recovering an intent genuinely stuck this way requires
+   `force_release_stuck_dispatch` — a deliberate, evidenced operator call,
+   never a timeout (see below).
 
 `process_intent` also no longer reports a bare `mark_acknowledged` failure
 as `"acknowledged"`. If the remote call succeeds but this worker's claim
@@ -109,39 +113,45 @@ documents and the outcome is `lost_claim`, not a fabricated success — run
 statistics must not silently over-report acknowledged intents that a
 different worker actually owns.
 
-### Post-fence resume race: reconciliation instead of prevention
+### Recovering a stuck in-flight dispatch: operator action, not a timer
 
-Mechanism 2 above only bounds the *probability* of a stalled worker
-resuming and issuing its remote mutation anyway — a fixed grace period,
-however large, cannot make that probability zero. The gap between
-`mark_dispatch_started` returning and the following line's actual HTTP
-call can itself be stalled by a process pause of unbounded length, and
-there is no way for a single Python process to make a check-then-act
-sequence atomic with an external side effect unless the remote side
-verifies a fencing token as part of the same write. The Paperclip issues
-API was checked and exposes no client-supplied idempotency/dedupe key on
-create; adding one is a platform-code change outside this ops-only
-consumer script's scope.
+The Paperclip issues API was checked and exposes no client-supplied
+idempotency/dedupe key on create; adding one is a platform-code change
+outside this ops-only consumer script's scope, so there is no
+provider-side way to make the fence-then-call sequence atomic with the
+external side effect. Given that, the only way to honor a hard
+"no second create" requirement is to never let a second worker attempt the
+remote call at all while the first worker's outcome is unknown — which is
+what mechanism 2 above now guarantees at the cost of a stuck-forever intent
+if a worker genuinely dies mid-dispatch.
 
-Rather than keep shrinking that window, `reconcile_created_issue` makes
-the *outcome* deterministic: immediately after `create_issue` succeeds in
-`dispatch_create`/`dispatch_escalation`, it re-searches Paperclip for every
-issue carrying the exact idempotency marker. If a race actually produced
-more than one, the earliest-created issue is canonical and every other one
-is closed (`status: done`) with a comment pointing at the canonical id.
-This guarantees at most one *live* issue for a given idempotency key
-survives a dispatch cycle no matter how the physical race interleaved —
-the practically achievable form of "a reclaimed worker cannot leave a
-lasting duplicate" when true zero-probability prevention isn't available.
+`force_release_stuck_dispatch(collection, intent_id, workspace_id,
+expected_owner, operator_note)` is the sanctioned recovery: it clears
+`claimOwner`/`dispatchStartedAt` (scoped to `expected_owner` still holding
+the claim, and a no-op otherwise) so the intent becomes reclaimable again,
+but only once an operator has confirmed real remote state out-of-band
+(typically: search Paperclip for the intent's idempotency marker) and
+recorded that confirmation in `operator_note`, which is required to be
+non-empty — a stuck claim can never be cleared silently.
+
+`reconcile_created_issue` remains as defense-in-depth, not the primary
+mechanism: `dispatch_create`/`dispatch_escalation` call it both right
+after a fresh `create_issue` succeeds and on the marker-hit replay branch
+(when a prior run already found an existing issue for this key), so any
+duplicate that somehow still exists — e.g. an operator force-released a
+stuck dispatch before fully confirming remote state, or a duplicate
+predates this fix — converges to exactly one live issue (earliest-created
+wins, every other one closed with a comment pointing at the canonical id)
+the next time this idempotency key is touched, rather than being carried
+forever.
 
 `dispatch_update`/`dispatch_supersession` mutate an *existing* target issue
-rather than creating a new one, so the same race can produce at worst a
-duplicate informational comment on that target — not a duplicate issue,
-and not the HIGH risk this ticket's risk section names. No comment-level
-reconciliation was added for those two kinds; the existing `claimOwner`-
-scoped `mark_acknowledged` already guarantees the accounting stays correct
-(never double-acknowledged) even when the stale worker's own remote call
-still fires.
+rather than creating a new one, so the same class of race can produce at
+worst a duplicate informational comment on that target — not a duplicate
+issue, and not the HIGH risk this ticket's risk section names. No
+comment-level reconciliation was added for those two kinds; the existing
+`claimOwner`-scoped `mark_acknowledged` already guarantees the accounting
+stays correct (never double-acknowledged).
 
 ## Required environment variables (names only)
 
