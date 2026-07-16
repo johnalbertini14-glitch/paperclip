@@ -46,6 +46,23 @@ remote call already succeeded but the local `deliveryState` write did not
 land, the marker search finds the existing issue/comment and the consumer
 only re-applies the acknowledgement — it never creates a duplicate.
 
+The marker is embedded via `embed_marker_bounded`, which truncates body
+content *before* appending the marker rather than embedding then
+truncating — this guarantees the marker survives even when the rendered
+body exceeds `MAX_DESCRIPTION_CHARS` (20,000), so replay can always find
+the prior issue/comment regardless of payload size.
+
+## Concurrency safety (two scheduled runs racing the same intent)
+
+Before dispatching any remote mutation, the consumer atomically claims the
+intent via a single Mongo `find_one_and_update` (`claim_intent`), matching
+only if the intent is still `pending` and either unclaimed or its previous
+claim's lease (`claimLeaseExpiresAt`, default 5 minutes) has expired. A
+worker that loses the race gets `None` back and skips the intent for this
+cycle without touching the Paperclip API. The claim is released
+(`release_claim`) on every exit path — deferred, failed, or acknowledged —
+so a legitimate retry isn't blocked waiting out the full lease.
+
 ## Required environment variables (names only)
 
 | Variable | Purpose |

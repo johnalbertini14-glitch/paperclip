@@ -46,12 +46,13 @@ import logging
 import os
 import re
 import sys
+import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from pymongo import MongoClient
+from pymongo import MongoClient, ReturnDocument
 from pymongo.collection import Collection
 
 logger = logging.getLogger("feed_backlog_outbox_consumer")
@@ -70,6 +71,7 @@ DELIVERY_STATE_FAILED = "failed"
 MAX_LAST_ERROR_CHARS = 512
 MAX_DESCRIPTION_CHARS = 20000
 DEFAULT_BATCH_LIMIT = 25
+CLAIM_LEASE_SECONDS = 300
 
 MARKER_TEMPLATE = "<!-- outbox-intent:{key} -->"
 MARKER_RE = re.compile(r"<!-- outbox-intent:(?P<key>\S+?) -->")
@@ -219,6 +221,20 @@ def find_marker(text: Optional[str]) -> Optional[str]:
     return match.group("key") if match else None
 
 
+def embed_marker_bounded(text: str, idempotency_key: str, max_chars: int = MAX_DESCRIPTION_CHARS) -> str:
+    """Embed the marker and bound the result to max_chars, truncating the
+    body content (never the marker) to make room. The old embed-then-
+    truncate order could cut the marker off entirely at the size limit,
+    which makes a replay after a remote-success/local-write failure unable
+    to find the prior issue/comment and duplicates the external mutation
+    (REVA-27715 review finding #1)."""
+    suffix = f"\n\n{MARKER_TEMPLATE.format(key=idempotency_key)}"
+    if len(suffix) >= max_chars:
+        return suffix[-max_chars:] if max_chars > 0 else ""
+    budget = max_chars - len(suffix)
+    return f"{text[:budget]}{suffix}"
+
+
 def find_existing_by_marker(client: PaperclipClient, idempotency_key: str) -> Optional[Dict[str, Any]]:
     for candidate in client.search_issues(idempotency_key):
         if find_marker(candidate.get("description")) == idempotency_key:
@@ -276,8 +292,7 @@ def render_description(payload: Dict[str, Any], idempotency_key: str, intent: Di
     metadata_lines.append(f"- `retrospectiveRunId`: {intent.get('retrospectiveRunId', 'unknown')}")
     metadata_lines.append(f"- `intentId`: {intent.get('id', 'unknown')}")
     rendered = body + "\n" + "\n".join(metadata_lines)
-    rendered = embed_marker(rendered, idempotency_key)
-    return rendered[:MAX_DESCRIPTION_CHARS]
+    return embed_marker_bounded(rendered, idempotency_key, MAX_DESCRIPTION_CHARS)
 
 
 # --------------------------------------------------------------------- #
@@ -322,7 +337,7 @@ def dispatch_update(client: PaperclipClient, config: ConsumerConfig, intent: Dic
         return target_id, issue.get("status", "unknown")
 
     comment_body = str(payload.get("body") or payload.get("description") or "Feed evidence update.")
-    comment_body = embed_marker(comment_body, idempotency_key)[:MAX_DESCRIPTION_CHARS]
+    comment_body = embed_marker_bounded(comment_body, idempotency_key, MAX_DESCRIPTION_CHARS)
     client.post_comment(target_id, comment_body)
     return target_id, "updated"
 
@@ -346,7 +361,7 @@ def dispatch_supersession(
         return superseded_external_id, issue.get("status", "unknown")
 
     note = str(payload.get("resolutionNote") or payload.get("body") or "Superseded by a newer executable intent.")
-    comment = embed_marker(note, idempotency_key)[:MAX_DESCRIPTION_CHARS]
+    comment = embed_marker_bounded(note, idempotency_key, MAX_DESCRIPTION_CHARS)
     client.patch_issue(superseded_external_id, {"status": "done", "comment": comment})
     return superseded_external_id, "done"
 
@@ -388,6 +403,42 @@ def get_collection(config: ConsumerConfig) -> Collection:
 def fetch_pending_intents(collection: Collection, limit: int) -> List[Dict[str, Any]]:
     cursor = collection.find({"deliveryState": DELIVERY_STATE_PENDING}).sort("createdAt", 1).limit(limit)
     return list(cursor)
+
+
+def claim_intent(
+    collection: Collection, intent_id: str, workspace_id: str, owner: str, lease_seconds: int = CLAIM_LEASE_SECONDS
+) -> Optional[Dict[str, Any]]:
+    """Atomically claim a pending intent before any remote dispatch, so two
+    concurrent consumer invocations can't both observe the same unclaimed
+    pending intent and both issue the remote mutation (REVA-27715 review
+    finding #2). Matches only if the intent is still pending AND either
+    unclaimed or its previous claim's lease has already expired (covers a
+    worker that crashed mid-dispatch without releasing). The atomicity
+    comes from Mongo's single-document find_one_and_update, not from any
+    read-then-write in this process."""
+    now_iso = _iso_now()
+    lease_expires_at = (datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)).isoformat()
+    return collection.find_one_and_update(
+        {
+            "id": intent_id,
+            "workspaceId": workspace_id,
+            "deliveryState": DELIVERY_STATE_PENDING,
+            "$or": [
+                {"claimOwner": {"$exists": False}},
+                {"claimOwner": None},
+                {"claimLeaseExpiresAt": {"$lt": now_iso}},
+            ],
+        },
+        {"$set": {"claimOwner": owner, "claimedAt": now_iso, "claimLeaseExpiresAt": lease_expires_at}},
+        return_document=ReturnDocument.AFTER,
+    )
+
+
+def release_claim(collection: Collection, intent_id: str, workspace_id: str) -> None:
+    collection.update_one(
+        {"id": intent_id, "workspaceId": workspace_id},
+        {"$unset": {"claimOwner": "", "claimedAt": "", "claimLeaseExpiresAt": ""}},
+    )
 
 
 def mark_acknowledged(
@@ -433,17 +484,34 @@ def mark_failed(collection: Collection, intent_id: str, workspace_id: str, error
 def requeue_failed_intent(collection: Collection, intent_id: str, workspace_id: str) -> bool:
     result = collection.update_one(
         {"id": intent_id, "workspaceId": workspace_id, "deliveryState": DELIVERY_STATE_FAILED},
-        {"$set": {"deliveryState": DELIVERY_STATE_PENDING, "lastError": None, "updatedAt": _iso_now()}},
+        {
+            "$set": {"deliveryState": DELIVERY_STATE_PENDING, "lastError": None, "updatedAt": _iso_now()},
+            "$unset": {"claimOwner": "", "claimedAt": "", "claimLeaseExpiresAt": ""},
+        },
     )
     return result.matched_count > 0
 
 
 def process_intent(
-    client: PaperclipClient, config: ConsumerConfig, collection: Collection, intent: Dict[str, Any]
+    client: PaperclipClient,
+    config: ConsumerConfig,
+    collection: Collection,
+    intent: Dict[str, Any],
+    owner: Optional[str] = None,
 ) -> str:
     intent_id = intent["id"]
     workspace_id = intent["workspaceId"]
     kind = intent.get("intentKind")
+    owner = owner or f"pid:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+
+    claimed = claim_intent(collection, intent_id, workspace_id, owner)
+    if claimed is None:
+        logger.info(
+            "intent id=%s kind=%s not claimed (already claimed by another worker or no longer pending); skipping",
+            intent_id,
+            kind,
+        )
+        return "skipped_claimed"
 
     try:
         if kind == INTENT_KIND_CREATE:
@@ -458,6 +526,7 @@ def process_intent(
             raise DispositionError(f"unknown intentKind {kind!r}")
     except DeferIntent as exc:
         logger.info("deferring intent id=%s kind=%s: %s", intent_id, kind, exc)
+        release_claim(collection, intent_id, workspace_id)
         return "deferred"
     except Exception as exc:  # noqa: BLE001 - every dispatch failure must be persisted, never silently dropped
         persisted = False
@@ -465,6 +534,7 @@ def process_intent(
             persisted = mark_failed(collection, intent_id, workspace_id, exc)
         except Exception:
             logger.exception("failed to persist failure state for intent id=%s", intent_id)
+        release_claim(collection, intent_id, workspace_id)
         logger.error(
             "intent id=%s kind=%s dispatch failed (persisted=%s): %s",
             intent_id,
@@ -475,6 +545,7 @@ def process_intent(
         return "failed"
 
     acked = mark_acknowledged(collection, intent_id, workspace_id, external_id, external_status)
+    release_claim(collection, intent_id, workspace_id)
     if not acked:
         logger.warning(
             "intent id=%s already resolved by a concurrent run; external_id=%s not re-applied locally",
@@ -487,10 +558,17 @@ def process_intent(
 def run_once(config: ConsumerConfig, run_id: Optional[str] = None) -> Dict[str, int]:
     collection = get_collection(config)
     client = PaperclipClient(config, run_id=run_id)
-    stats: Dict[str, int] = {"pending_seen": 0, "acknowledged": 0, "deferred": 0, "failed": 0}
+    owner = run_id or f"pid:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+    stats: Dict[str, int] = {
+        "pending_seen": 0,
+        "acknowledged": 0,
+        "deferred": 0,
+        "failed": 0,
+        "skipped_claimed": 0,
+    }
     for intent in fetch_pending_intents(collection, config.batch_limit):
         stats["pending_seen"] += 1
-        outcome = process_intent(client, config, collection, intent)
+        outcome = process_intent(client, config, collection, intent, owner=owner)
         stats[outcome] = stats.get(outcome, 0) + 1
     return stats
 

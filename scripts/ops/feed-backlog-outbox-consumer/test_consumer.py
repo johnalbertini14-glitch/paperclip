@@ -253,8 +253,10 @@ class ProcessIntentTests(unittest.TestCase):
         outcome = consumer.process_intent(client, config, collection, intent)
 
         self.assertEqual(outcome, "failed")
-        collection.update_one.assert_called_once()
-        filter_arg, update_arg = collection.update_one.call_args[0]
+        # Two update_one calls: mark_failed persists the redacted error,
+        # then release_claim clears the claim fields taken before dispatch.
+        self.assertEqual(collection.update_one.call_count, 2)
+        filter_arg, update_arg = collection.update_one.call_args_list[0][0]
         self.assertEqual(filter_arg["deliveryState"], "pending")
         self.assertNotIn("verysecrettoken1234567890", update_arg["$set"]["lastError"])
 
@@ -284,6 +286,131 @@ class ProcessIntentTests(unittest.TestCase):
         outcome_2 = consumer.process_intent(client, config, collection, intent)
         self.assertEqual(outcome_2, "acknowledged")
         client.create_issue.assert_called_once()  # still only once total
+
+
+class MarkerBoundaryAtMaxPayloadTests(unittest.TestCase):
+    """REVA-27715 review finding #1: the marker must survive truncation at
+    MAX_DESCRIPTION_CHARS. Body content is what gets cut, never the marker."""
+
+    def test_embed_marker_bounded_preserves_marker_at_max_length(self):
+        idempotency_key = "create:fp-huge:0"
+        huge_text = "x" * 50000
+        result = consumer.embed_marker_bounded(huge_text, idempotency_key, consumer.MAX_DESCRIPTION_CHARS)
+        self.assertLessEqual(len(result), consumer.MAX_DESCRIPTION_CHARS)
+        self.assertEqual(consumer.find_marker(result), idempotency_key)
+
+    def test_dispatch_create_preserves_marker_with_max_length_body(self):
+        config = make_config()
+        client = MagicMock()
+        client.search_issues.return_value = []
+        client.create_issue.return_value = {"id": "issue-huge", "status": "todo"}
+
+        intent = make_create_intent(idempotency_key="create:fp-huge:0", body="x" * 50000)
+        consumer.dispatch_create(client, config, intent)
+
+        body = client.create_issue.call_args[0][0]
+        self.assertLessEqual(len(body["description"]), consumer.MAX_DESCRIPTION_CHARS)
+        self.assertEqual(consumer.find_marker(body["description"]), "create:fp-huge:0")
+
+    def test_dispatch_update_preserves_marker_with_max_length_body(self):
+        client = MagicMock()
+        client.list_comments.return_value = []
+        config = make_config()
+        intent = {
+            "id": "intent-2",
+            "workspaceId": "workspace-1",
+            "idempotencyKey": "update:fp-huge:intent-1:run-2",
+            "intentKind": consumer.INTENT_KIND_UPDATE,
+            "payload": {"body": "x" * 50000},
+            "targetsExternalIssueId": "issue-1",
+        }
+        consumer.dispatch_update(client, config, intent)
+
+        posted_body = client.post_comment.call_args[0][1]
+        self.assertLessEqual(len(posted_body), consumer.MAX_DESCRIPTION_CHARS)
+        self.assertEqual(consumer.find_marker(posted_body), "update:fp-huge:intent-1:run-2")
+
+    def test_dispatch_supersession_preserves_marker_with_max_length_body(self):
+        client = MagicMock()
+        client.list_comments.return_value = []
+        config = make_config()
+        collection = MagicMock()
+        collection.find_one.return_value = {"id": "intent-1", "externalIssueId": "issue-1"}
+        intent = {
+            "id": "intent-3",
+            "workspaceId": "workspace-1",
+            "idempotencyKey": "supersession:fp-huge:intent-1:run-2",
+            "intentKind": consumer.INTENT_KIND_SUPERSESSION,
+            "supersedesIntentId": "intent-1",
+            "payload": {"resolutionNote": "x" * 50000},
+        }
+        consumer.dispatch_supersession(client, config, collection, intent)
+
+        patch_body = client.patch_issue.call_args[0][1]
+        self.assertLessEqual(len(patch_body["comment"]), consumer.MAX_DESCRIPTION_CHARS)
+        self.assertEqual(consumer.find_marker(patch_body["comment"]), "supersession:fp-huge:intent-1:run-2")
+
+
+class ClaimTests(unittest.TestCase):
+    """REVA-27715 review finding #2: intents must be atomically claimed
+    before remote dispatch."""
+
+    def test_claim_filter_scopes_to_pending_and_unclaimed_or_expired(self):
+        collection = MagicMock()
+        collection.find_one_and_update.return_value = {"id": "intent-1", "workspaceId": "workspace-1"}
+        result = consumer.claim_intent(collection, "intent-1", "workspace-1", "worker-a")
+        self.assertIsNotNone(result)
+        filter_arg = collection.find_one_and_update.call_args[0][0]
+        self.assertEqual(filter_arg["id"], "intent-1")
+        self.assertEqual(filter_arg["workspaceId"], "workspace-1")
+        self.assertEqual(filter_arg["deliveryState"], "pending")
+        self.assertIn("$or", filter_arg)
+        update_arg = collection.find_one_and_update.call_args[0][1]
+        self.assertEqual(update_arg["$set"]["claimOwner"], "worker-a")
+
+    def test_claim_returns_none_when_already_held(self):
+        collection = MagicMock()
+        collection.find_one_and_update.return_value = None
+        result = consumer.claim_intent(collection, "intent-1", "workspace-1", "worker-b")
+        self.assertIsNone(result)
+
+    def test_release_claim_unsets_claim_fields_scoped_to_intent(self):
+        collection = MagicMock()
+        consumer.release_claim(collection, "intent-1", "workspace-1")
+        filter_arg, update_arg = collection.update_one.call_args[0]
+        self.assertEqual(filter_arg["id"], "intent-1")
+        self.assertEqual(filter_arg["workspaceId"], "workspace-1")
+        self.assertIn("claimOwner", update_arg["$unset"])
+
+
+class ConcurrencyRegressionTests(unittest.TestCase):
+    def test_two_concurrent_workers_racing_the_same_intent_only_one_dispatches(self):
+        """Simulates two scheduled consumer invocations racing on the same
+        pending intent: only the worker that wins the atomic Mongo claim
+        may dispatch the remote mutation; the loser must skip without
+        calling the Paperclip API at all."""
+        config = make_config()
+        client = MagicMock()
+        client.search_issues.return_value = []
+        client.create_issue.return_value = {"id": "issue-1", "status": "todo"}
+        collection = MagicMock()
+        intent = make_create_intent()
+
+        # Worker A wins the atomic claim.
+        collection.find_one_and_update.return_value = dict(intent)
+        collection.update_one.return_value = MagicMock(matched_count=1)
+        outcome_a = consumer.process_intent(client, config, collection, intent, owner="worker-a")
+        self.assertEqual(outcome_a, "acknowledged")
+        client.create_issue.assert_called_once()
+
+        # Worker B races in on the same still-pending doc and loses the
+        # claim (Mongo's atomic find_one_and_update matches nothing because
+        # worker A's claim, and its lease, are still live).
+        collection.find_one_and_update.return_value = None
+        outcome_b = consumer.process_intent(client, config, collection, intent, owner="worker-b")
+        self.assertEqual(outcome_b, "skipped_claimed")
+        client.create_issue.assert_called_once()  # still only once total
+        client.search_issues.assert_called_once()  # worker B never re-dispatched
 
 
 if __name__ == "__main__":
