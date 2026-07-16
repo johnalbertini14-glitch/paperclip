@@ -109,6 +109,40 @@ documents and the outcome is `lost_claim`, not a fabricated success — run
 statistics must not silently over-report acknowledged intents that a
 different worker actually owns.
 
+### Post-fence resume race: reconciliation instead of prevention
+
+Mechanism 2 above only bounds the *probability* of a stalled worker
+resuming and issuing its remote mutation anyway — a fixed grace period,
+however large, cannot make that probability zero. The gap between
+`mark_dispatch_started` returning and the following line's actual HTTP
+call can itself be stalled by a process pause of unbounded length, and
+there is no way for a single Python process to make a check-then-act
+sequence atomic with an external side effect unless the remote side
+verifies a fencing token as part of the same write. The Paperclip issues
+API was checked and exposes no client-supplied idempotency/dedupe key on
+create; adding one is a platform-code change outside this ops-only
+consumer script's scope.
+
+Rather than keep shrinking that window, `reconcile_created_issue` makes
+the *outcome* deterministic: immediately after `create_issue` succeeds in
+`dispatch_create`/`dispatch_escalation`, it re-searches Paperclip for every
+issue carrying the exact idempotency marker. If a race actually produced
+more than one, the earliest-created issue is canonical and every other one
+is closed (`status: done`) with a comment pointing at the canonical id.
+This guarantees at most one *live* issue for a given idempotency key
+survives a dispatch cycle no matter how the physical race interleaved —
+the practically achievable form of "a reclaimed worker cannot leave a
+lasting duplicate" when true zero-probability prevention isn't available.
+
+`dispatch_update`/`dispatch_supersession` mutate an *existing* target issue
+rather than creating a new one, so the same race can produce at worst a
+duplicate informational comment on that target — not a duplicate issue,
+and not the HIGH risk this ticket's risk section names. No comment-level
+reconciliation was added for those two kinds; the existing `claimOwner`-
+scoped `mark_acknowledged` already guarantees the accounting stays correct
+(never double-acknowledged) even when the stale worker's own remote call
+still fires.
+
 ## Required environment variables (names only)
 
 | Variable | Purpose |

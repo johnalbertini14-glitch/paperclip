@@ -256,6 +256,63 @@ def find_existing_by_marker(client: PaperclipClient, idempotency_key: str) -> Op
     return None
 
 
+def reconcile_created_issue(
+    client: PaperclipClient, idempotency_key: str, created_id: str, created_status: str
+) -> Tuple[str, str]:
+    """Called immediately after a remote create_issue call succeeds in
+    dispatch_create/dispatch_escalation. This is the correctness backstop
+    for REVA-27715 review round 5's finding: no purely time-based fence
+    (mark_dispatch_started's pre-call recheck, DISPATCH_RECLAIM_GRACE_SECONDS)
+    can close the check-then-act gap to zero probability in a single
+    process without cooperation from the remote side, because the gap
+    between "the fence check passed" and "the HTTP call actually executes"
+    can itself be stalled arbitrarily long by process/scheduler pauses --
+    any fixed grace period only shrinks that window, it cannot prove it
+    away. The Paperclip issues API was verified (via this module's own
+    PaperclipClient, docs, and prior review evidence) to expose no
+    client-supplied idempotency/dedupe key on create; adding one would be a
+    platform-code change outside this ticket's Ops-only scope
+    (feed-backlog-outbox-consumer script), so provider-enforced fencing is
+    not an available option here.
+
+    Instead this makes the OUTCOME deterministic rather than the timing:
+    re-query the real remote state for every issue carrying this exact
+    idempotency marker right after our own create call. If a race actually
+    produced more than one, the earliest-created issue is the canonical
+    winner and every other one is immediately closed with a comment
+    pointing at the canonical id. This guarantees at most one *live* issue
+    for a given idempotency key survives a dispatch cycle regardless of how
+    many workers' HTTP calls actually landed, which is the practically
+    achievable form of "a reclaimed worker cannot leave a lasting
+    duplicate" when true prevention isn't available."""
+    candidates = [
+        candidate
+        for candidate in client.search_issues(idempotency_key)
+        if find_marker(candidate.get("description")) == idempotency_key
+    ]
+    if len(candidates) <= 1:
+        return created_id, created_status
+
+    def sort_key(candidate: Dict[str, Any]) -> Tuple[str, str]:
+        return (str(candidate.get("createdAt") or ""), str(candidate.get("id") or ""))
+
+    canonical = min(candidates, key=sort_key)
+    for duplicate in candidates:
+        if duplicate["id"] == canonical["id"] or duplicate.get("status") == "done":
+            continue
+        client.patch_issue(
+            duplicate["id"],
+            {
+                "status": "done",
+                "comment": (
+                    f"Closed as a concurrent-dispatch duplicate of {canonical['id']} "
+                    f"(same outbox idempotency key `{idempotency_key}`); no manual action needed."
+                ),
+            },
+        )
+    return canonical["id"], canonical.get("status", created_status)
+
+
 def comment_already_posted(client: PaperclipClient, issue_id: str, idempotency_key: str) -> bool:
     for comment in client.list_comments(issue_id):
         text = comment.get("body") if comment.get("body") is not None else comment.get("comment")
@@ -354,7 +411,7 @@ def dispatch_create(
 
     _fence_dispatch(collection, intent, owner)
     created = client.create_issue(body)
-    return created["id"], created.get("status", "todo")
+    return reconcile_created_issue(client, idempotency_key, created["id"], created.get("status", "todo"))
 
 
 def dispatch_update(
@@ -428,7 +485,7 @@ def dispatch_escalation(
 
     _fence_dispatch(collection, intent, owner)
     created = client.create_issue(body)
-    return created["id"], created.get("status", "todo")
+    return reconcile_created_issue(client, idempotency_key, created["id"], created.get("status", "todo"))
 
 
 # --------------------------------------------------------------------- #

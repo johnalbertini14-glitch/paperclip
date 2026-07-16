@@ -1,6 +1,6 @@
 import unittest
 from typing import Any, Dict
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import consumer
 
@@ -446,7 +446,11 @@ class ConcurrencyRegressionTests(unittest.TestCase):
         outcome_b = consumer.process_intent(client, config, collection, intent, owner="worker-b")
         self.assertEqual(outcome_b, "skipped_claimed")
         client.create_issue.assert_called_once()  # still only once total
-        client.search_issues.assert_called_once()  # worker B never re-dispatched
+        # search_issues is called twice for worker A's own successful
+        # dispatch (pre-create marker check + post-create reconciliation
+        # search, per reconcile_created_issue) and zero additional times for
+        # worker B, who never claimed and never dispatched at all.
+        self.assertEqual(client.search_issues.call_count, 2)
 
 
 class FakeIntentCollection:
@@ -457,8 +461,12 @@ class FakeIntentCollection:
     real Mongo would for a single document under a concurrency race,
     without requiring a live Mongo server."""
 
-    def __init__(self, doc):
+    def __init__(self, doc, extra_find_one_result=None):
         self.doc: Dict[str, Any] = dict(doc)
+        self._extra_find_one_result = extra_find_one_result
+
+    def find_one(self, _filt):
+        return self._extra_find_one_result
 
     def _matches(self, filt: Dict[str, Any]) -> bool:
         for key, cond in filt.items():
@@ -641,6 +649,304 @@ class ProcessIntentLostClaimTests(unittest.TestCase):
 
         self.assertEqual(outcome, "lost_claim")
         client.create_issue.assert_called_once()
+
+
+class ReconcileCreatedIssueTests(unittest.TestCase):
+    """REVA-27715 review round 5: reconcile_created_issue is the correctness
+    backstop for the post-fence race the round-4 fence/grace mechanism could
+    not close to zero probability. Unit-level coverage of the function in
+    isolation before the full end-to-end race regressions below."""
+
+    def test_noop_when_no_duplicate_found(self):
+        client = MagicMock()
+        client.search_issues.return_value = [
+            {"id": "issue-1", "status": "todo", "description": "...\n<!-- outbox-intent:create:fp-1:0 -->"}
+        ]
+        external_id, status = consumer.reconcile_created_issue(client, "create:fp-1:0", "issue-1", "todo")
+        self.assertEqual((external_id, status), ("issue-1", "todo"))
+        client.patch_issue.assert_not_called()
+
+    def test_closes_duplicate_and_returns_earliest_as_canonical(self):
+        client = MagicMock()
+        client.search_issues.return_value = [
+            {
+                "id": "issue-2",
+                "status": "todo",
+                "description": "...\n<!-- outbox-intent:create:fp-1:0 -->",
+                "createdAt": "2026-01-01T00:05:00+00:00",
+            },
+            {
+                "id": "issue-1",
+                "status": "todo",
+                "description": "...\n<!-- outbox-intent:create:fp-1:0 -->",
+                "createdAt": "2026-01-01T00:01:00+00:00",
+            },
+        ]
+        external_id, status = consumer.reconcile_created_issue(client, "create:fp-1:0", "issue-2", "todo")
+        self.assertEqual(external_id, "issue-1")
+        client.patch_issue.assert_called_once_with(
+            "issue-2",
+            {
+                "status": "done",
+                "comment": (
+                    "Closed as a concurrent-dispatch duplicate of issue-1 "
+                    "(same outbox idempotency key `create:fp-1:0`); no manual action needed."
+                ),
+            },
+        )
+
+    def test_skips_already_done_duplicate(self):
+        client = MagicMock()
+        client.search_issues.return_value = [
+            {
+                "id": "issue-1",
+                "status": "todo",
+                "description": "...\n<!-- outbox-intent:create:fp-1:0 -->",
+                "createdAt": "2026-01-01T00:01:00+00:00",
+            },
+            {
+                # Later-created duplicate that some other cleanup path (or a
+                # prior reconciliation pass) already closed -- must not be
+                # re-patched.
+                "id": "issue-2",
+                "status": "done",
+                "description": "...\n<!-- outbox-intent:create:fp-1:0 -->",
+                "createdAt": "2026-01-01T00:05:00+00:00",
+            },
+        ]
+        consumer.reconcile_created_issue(client, "create:fp-1:0", "issue-2", "todo")
+        client.patch_issue.assert_not_called()
+
+
+class FakeIssueStore:
+    """Minimal shared remote-issue fake so two independent PaperclipClient
+    stand-ins (modeling two concurrent workers) observe each other's
+    creates/patches exactly like a real shared Paperclip API would. Used to
+    prove the round-5 reconciliation invariant end-to-end instead of
+    mocking each worker's view independently, which would hide whether they
+    actually converge on the same remote ground truth."""
+
+    def __init__(self):
+        self.issues: Dict[str, Dict[str, Any]] = {}
+        self._counter = 0
+
+    def create_issue(self, body):
+        self._counter += 1
+        issue_id = f"issue-{self._counter}"
+        record = {
+            "id": issue_id,
+            "status": "todo",
+            "description": body.get("description", ""),
+            "createdAt": f"2026-01-01T00:{self._counter:02d}:00+00:00",
+        }
+        self.issues[issue_id] = record
+        return dict(record)
+
+    def search_issues(self, query):
+        return [dict(v) for v in self.issues.values() if query in (v.get("description") or "")]
+
+    def patch_issue(self, issue_id, body):
+        self.issues[issue_id].update({k: v for k, v in body.items() if k != "comment"})
+        return dict(self.issues[issue_id])
+
+    def get_issue(self, issue_id):
+        return dict(self.issues[issue_id])
+
+
+def make_store_backed_client(store: FakeIssueStore) -> MagicMock:
+    client = MagicMock()
+    client.create_issue.side_effect = store.create_issue
+    client.search_issues.side_effect = store.search_issues
+    client.patch_issue.side_effect = store.patch_issue
+    client.get_issue.side_effect = store.get_issue
+    client.list_comments.return_value = []
+    client.post_comment.side_effect = lambda issue_id, body: {"id": f"comment-on-{issue_id}"}
+    return client
+
+
+def _stall_a_after_fence_then_run_b_to_completion(client_b, config, intent, test_case):
+    """Builds the mark_dispatch_started replacement shared by every
+    round-5 race regression below: call the real fencing write (so worker A
+    legitimately still holds the claim at that instant, matching the review
+    comment's own description of the race), then simulate A being paused
+    for far longer than DISPATCH_RECLAIM_GRACE_SECONDS before it reaches the
+    very next line (the actual remote mutation) by force-expiring both the
+    ordinary lease and the dispatch grace, and running worker B's entire
+    process_intent to completion in the gap."""
+    real_mark_dispatch_started = consumer.mark_dispatch_started
+
+    def fence_then_let_b_fully_run(coll, intent_id, workspace_id, owner):
+        result = real_mark_dispatch_started(coll, intent_id, workspace_id, owner)
+        # The patch below is process-wide for the duration of the `with`
+        # block, so worker B's own _fence_dispatch call (inside the nested
+        # process_intent run just below) re-enters this same function too.
+        # Only worker A's call should trigger the stall-and-let-B-run
+        # behavior; B's own fencing call must fall straight through to the
+        # real implementation or this would recurse into itself forever.
+        if owner != "worker-a":
+            return result
+        coll.doc["claimLeaseExpiresAt"] = "1970-01-01T00:00:00+00:00"
+        coll.doc["dispatchStartedAt"] = "1970-01-01T00:00:00+00:00"
+        outcome_b = consumer.process_intent(client_b, config, coll, intent, owner="worker-b")
+        test_case.assertEqual(outcome_b, "acknowledged")
+        return result
+
+    return fence_then_let_b_fully_run
+
+
+class PostFenceResumeRaceRegressionTests(unittest.TestCase):
+    """REVA-27715 review round 5 finding: `_fence_dispatch` re-verifies
+    ownership immediately before the remote call, but the gap between that
+    write returning and the remote call actually executing can itself be
+    stalled arbitrarily long by a process pause -- no fixed
+    DISPATCH_RECLAIM_GRACE_SECONDS can close that to zero probability
+    without provider-side atomic fencing (verified unavailable on the
+    Paperclip issues API; adding it would be a platform-code change outside
+    this ticket's Ops-only scope). These regressions simulate exactly that:
+    worker A passes the fence, is paused long enough for worker B to fully
+    reclaim/dispatch/acknowledge, then A resumes and still issues its own
+    remote mutation. What must be proven is not that A's call never fires
+    (it does -- that is the honestly-unpreventable part) but that the
+    SYSTEM converges to a safe state: for create/escalation, at most one
+    live issue survives (reconcile_created_issue); for update/supersession,
+    accounting is never double-acknowledged and nothing raises."""
+
+    def test_create_race_reconciliation_closes_worker_as_duplicate_and_reports_canonical(self):
+        config = make_config()
+        store = FakeIssueStore()
+        collection = FakeIntentCollection(
+            {"id": "intent-1", "workspaceId": "workspace-1", "deliveryState": consumer.DELIVERY_STATE_PENDING}
+        )
+        intent = make_create_intent(idempotency_key="create:fp-recon:0")
+        client_b = make_store_backed_client(store)
+        client_a = make_store_backed_client(store)
+
+        with patch.object(
+            consumer,
+            "mark_dispatch_started",
+            side_effect=_stall_a_after_fence_then_run_b_to_completion(client_b, config, intent, self),
+        ):
+            outcome_a = consumer.process_intent(client_a, config, collection, intent, owner="worker-a")
+
+        # A's own create_issue call genuinely fires -- the physical HTTP
+        # race is not preventable without provider-side fencing. What must
+        # hold is the post-hoc invariant: exactly one issue remains open.
+        client_a.create_issue.assert_called_once()
+        client_b.create_issue.assert_called_once()
+        self.assertEqual(outcome_a, "lost_claim")
+        open_issues = [record for record in store.issues.values() if record["status"] != "done"]
+        self.assertEqual(len(open_issues), 1)
+        self.assertEqual(open_issues[0]["id"], "issue-1")  # B created first, during A's stall
+        self.assertEqual(store.issues["issue-2"]["status"], "done")
+        self.assertEqual(collection.doc["deliveryState"], consumer.DELIVERY_STATE_ACKNOWLEDGED)
+        self.assertEqual(collection.doc["externalIssueId"], "issue-1")
+
+    def test_escalation_race_reconciliation_closes_worker_as_duplicate(self):
+        config = make_config()
+        store = FakeIssueStore()
+        collection = FakeIntentCollection(
+            {"id": "intent-4", "workspaceId": "workspace-1", "deliveryState": consumer.DELIVERY_STATE_PENDING}
+        )
+        intent = {
+            "id": "intent-4",
+            "workspaceId": "workspace-1",
+            "idempotencyKey": "escalation:fp-recon:0",
+            "intentKind": consumer.INTENT_KIND_ESCALATION,
+            "signalType": "risk_signal",
+            "payload": {"title": "Escalate", "body": "evidence"},
+            "retrospectiveRunId": "run-1",
+        }
+        client_b = make_store_backed_client(store)
+        client_a = make_store_backed_client(store)
+
+        with patch.object(
+            consumer,
+            "mark_dispatch_started",
+            side_effect=_stall_a_after_fence_then_run_b_to_completion(client_b, config, intent, self),
+        ):
+            outcome_a = consumer.process_intent(client_a, config, collection, intent, owner="worker-a")
+
+        client_a.create_issue.assert_called_once()
+        client_b.create_issue.assert_called_once()
+        self.assertEqual(outcome_a, "lost_claim")
+        open_issues = [record for record in store.issues.values() if record["status"] != "done"]
+        self.assertEqual(len(open_issues), 1)
+        self.assertEqual(open_issues[0]["id"], "issue-1")
+
+    def test_update_race_stale_worker_neither_double_acknowledges_nor_raises(self):
+        config = make_config()
+        collection = FakeIntentCollection(
+            {"id": "intent-2", "workspaceId": "workspace-1", "deliveryState": consumer.DELIVERY_STATE_PENDING}
+        )
+        intent = {
+            "id": "intent-2",
+            "workspaceId": "workspace-1",
+            "idempotencyKey": "update:fp-race:intent-1:run-2",
+            "intentKind": consumer.INTENT_KIND_UPDATE,
+            "payload": {"body": "more evidence"},
+            "targetsExternalIssueId": "issue-1",
+        }
+        client_b = MagicMock()
+        client_b.list_comments.return_value = []
+        client_b.post_comment.return_value = {"id": "comment-b"}
+        client_a = MagicMock()
+        client_a.list_comments.return_value = []
+        client_a.post_comment.return_value = {"id": "comment-a"}
+
+        with patch.object(
+            consumer,
+            "mark_dispatch_started",
+            side_effect=_stall_a_after_fence_then_run_b_to_completion(client_b, config, intent, self),
+        ):
+            outcome_a = consumer.process_intent(client_a, config, collection, intent, owner="worker-a")
+
+        # A's own post_comment call still fires (same physical-race honesty
+        # as create), but this only ever produces a duplicate informational
+        # comment on the SAME already-existing target issue, never a
+        # duplicate issue -- outside this ticket's named HIGH risk. What
+        # must hold: no crash, and A must not double-acknowledge over B.
+        client_a.post_comment.assert_called_once()
+        client_b.post_comment.assert_called_once()
+        self.assertEqual(outcome_a, "lost_claim")
+        self.assertEqual(collection.doc["deliveryState"], consumer.DELIVERY_STATE_ACKNOWLEDGED)
+        self.assertEqual(collection.doc["externalIssueId"], "issue-1")
+
+    def test_supersession_race_stale_worker_neither_double_acknowledges_nor_raises(self):
+        config = make_config()
+        collection = FakeIntentCollection(
+            {"id": "intent-3", "workspaceId": "workspace-1", "deliveryState": consumer.DELIVERY_STATE_PENDING},
+            extra_find_one_result={"id": "intent-1", "externalIssueId": "issue-1"},
+        )
+        intent = {
+            "id": "intent-3",
+            "workspaceId": "workspace-1",
+            "idempotencyKey": "supersession:fp-race:intent-1:run-2",
+            "intentKind": consumer.INTENT_KIND_SUPERSESSION,
+            "supersedesIntentId": "intent-1",
+            "payload": {"resolutionNote": "closed"},
+        }
+        client_b = MagicMock()
+        client_b.list_comments.return_value = []
+        client_b.patch_issue.return_value = {"id": "issue-1", "status": "done"}
+        client_a = MagicMock()
+        client_a.list_comments.return_value = []
+        client_a.patch_issue.return_value = {"id": "issue-1", "status": "done"}
+
+        with patch.object(
+            consumer,
+            "mark_dispatch_started",
+            side_effect=_stall_a_after_fence_then_run_b_to_completion(client_b, config, intent, self),
+        ):
+            outcome_a = consumer.process_intent(client_a, config, collection, intent, owner="worker-a")
+
+        # Patching the same target to "done" twice is idempotent on its
+        # final status -- no duplicate resource, at worst a duplicate
+        # informational comment. Accounting must still be correct.
+        client_a.patch_issue.assert_called_once()
+        client_b.patch_issue.assert_called_once()
+        self.assertEqual(outcome_a, "lost_claim")
+        self.assertEqual(collection.doc["deliveryState"], consumer.DELIVERY_STATE_ACKNOWLEDGED)
+        self.assertEqual(collection.doc["externalIssueId"], "issue-1")
 
 
 if __name__ == "__main__":
