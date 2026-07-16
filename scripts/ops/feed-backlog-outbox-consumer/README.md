@@ -73,6 +73,42 @@ the newer worker's live claim/state. With it, a stale worker's write
 matches zero documents and is a no-op — the newer worker's claim and any
 state it produces are left untouched.
 
+### Closing the marker-search -> remote-call gap
+
+`claim_intent` only protects the intent up to the point a worker starts
+dispatching. Each `dispatch_*` function still does a non-atomic
+search-then-mutate: search Paperclip for the idempotency marker, then (if
+absent) call the remote API. If a worker stalls in that exact gap long
+enough for its claim lease to expire, a second worker could legitimately
+reclaim, also see no marker, and also call the remote API — producing a
+real duplicate issue/comment/patch that no local Mongo state prevents.
+
+Two mechanisms close this together:
+
+1. **Pre-dispatch fencing.** Immediately before the remote mutation (never
+   before), every dispatch function calls `mark_dispatch_started`, which
+   atomically re-verifies `claimOwner == owner` one more time and records
+   `dispatchStartedAt`. If this worker's claim was superseded in the
+   meantime, the write matches nothing, `mark_dispatch_started` returns
+   `False`, and the caller raises `LostClaimError` — the remote mutation is
+   never attempted. `process_intent` reports this as a distinct
+   `lost_claim` outcome.
+2. **Dispatch-aware reclaim grace period.** Once `dispatchStartedAt` is
+   set, `claim_intent` will not let another worker reclaim on an expired
+   ordinary lease alone — it additionally requires
+   `DISPATCH_RECLAIM_GRACE_SECONDS` (30 minutes, far longer than any single
+   HTTP call) to have elapsed since dispatch began. This means a worker
+   whose lease merely expires *while* an in-flight remote call is still
+   running cannot be preempted mid-call; only a worker that is genuinely
+   dead eventually frees the intent for reclaim.
+
+`process_intent` also no longer reports a bare `mark_acknowledged` failure
+as `"acknowledged"`. If the remote call succeeds but this worker's claim
+was lost before the local ack write lands, that write matches zero
+documents and the outcome is `lost_claim`, not a fabricated success — run
+statistics must not silently over-report acknowledged intents that a
+different worker actually owns.
+
 ## Required environment variables (names only)
 
 | Variable | Purpose |

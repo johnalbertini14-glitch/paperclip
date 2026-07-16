@@ -106,9 +106,11 @@ class DispatchCreateTests(unittest.TestCase):
         client = MagicMock()
         client.search_issues.return_value = []
         client.create_issue.return_value = {"id": "issue-1", "status": "todo"}
+        collection = MagicMock()
+        collection.update_one.return_value = MagicMock(matched_count=1)
 
         intent = make_create_intent()
-        external_id, status = consumer.dispatch_create(client, config, intent)
+        external_id, status = consumer.dispatch_create(client, config, collection, intent, "worker-a")
 
         self.assertEqual(external_id, "issue-1")
         self.assertEqual(status, "todo")
@@ -128,9 +130,10 @@ class DispatchCreateTests(unittest.TestCase):
         client.search_issues.return_value = [
             {"id": "issue-1", "status": "todo", "description": "...\n<!-- outbox-intent:create:fp-1:0 -->"}
         ]
+        collection = MagicMock()
 
         intent = make_create_intent()
-        external_id, status = consumer.dispatch_create(client, config, intent)
+        external_id, status = consumer.dispatch_create(client, config, collection, intent, "worker-a")
 
         self.assertEqual(external_id, "issue-1")
         self.assertEqual(status, "todo")
@@ -141,18 +144,37 @@ class DispatchCreateTests(unittest.TestCase):
         client = MagicMock()
         client.search_issues.return_value = []
         client.create_issue.return_value = {"id": "issue-2", "status": "todo"}
+        collection = MagicMock()
+        collection.update_one.return_value = MagicMock(matched_count=1)
 
         intent = make_create_intent(assigneeAgentId="local-board")
-        consumer.dispatch_create(client, config, intent)
+        consumer.dispatch_create(client, config, collection, intent, "worker-a")
 
         body = client.create_issue.call_args[0][0]
         self.assertNotIn("assigneeAgentId", body)
+
+    def test_fencing_lost_claim_raises_before_remote_create(self):
+        """If this worker's claim was already superseded by the time it
+        reaches the fencing check (mark_dispatch_started matches nothing),
+        dispatch_create must raise LostClaimError and must NOT call the
+        remote create_issue API (REVA-27715 review round 4 finding #1)."""
+        config = make_config()
+        client = MagicMock()
+        client.search_issues.return_value = []
+        collection = MagicMock()
+        collection.update_one.return_value = MagicMock(matched_count=0)
+
+        intent = make_create_intent()
+        with self.assertRaises(consumer.LostClaimError):
+            consumer.dispatch_create(client, config, collection, intent, "worker-a")
+        client.create_issue.assert_not_called()
 
 
 class DispatchUpdateTests(unittest.TestCase):
     def test_defers_when_no_target_issue_yet(self):
         client = MagicMock()
         config = make_config()
+        collection = MagicMock()
         intent = {
             "id": "intent-2",
             "workspaceId": "workspace-1",
@@ -162,13 +184,15 @@ class DispatchUpdateTests(unittest.TestCase):
             "targetsExternalIssueId": None,
         }
         with self.assertRaises(consumer.DeferIntent):
-            consumer.dispatch_update(client, config, intent)
+            consumer.dispatch_update(client, config, collection, intent, "worker-a")
         client.post_comment.assert_not_called()
 
     def test_posts_comment_with_marker_when_target_present(self):
         client = MagicMock()
         client.list_comments.return_value = []
         config = make_config()
+        collection = MagicMock()
+        collection.update_one.return_value = MagicMock(matched_count=1)
         intent = {
             "id": "intent-2",
             "workspaceId": "workspace-1",
@@ -177,7 +201,7 @@ class DispatchUpdateTests(unittest.TestCase):
             "payload": {"body": "more evidence"},
             "targetsExternalIssueId": "issue-1",
         }
-        external_id, status = consumer.dispatch_update(client, config, intent)
+        external_id, status = consumer.dispatch_update(client, config, collection, intent, "worker-a")
         self.assertEqual(external_id, "issue-1")
         self.assertEqual(status, "updated")
         client.post_comment.assert_called_once()
@@ -191,6 +215,7 @@ class DispatchUpdateTests(unittest.TestCase):
         ]
         client.get_issue.return_value = {"status": "in_progress"}
         config = make_config()
+        collection = MagicMock()
         intent = {
             "id": "intent-2",
             "workspaceId": "workspace-1",
@@ -199,7 +224,7 @@ class DispatchUpdateTests(unittest.TestCase):
             "payload": {"body": "more evidence"},
             "targetsExternalIssueId": "issue-1",
         }
-        external_id, status = consumer.dispatch_update(client, config, intent)
+        external_id, status = consumer.dispatch_update(client, config, collection, intent, "worker-a")
         self.assertEqual(external_id, "issue-1")
         self.assertEqual(status, "in_progress")
         client.post_comment.assert_not_called()
@@ -309,9 +334,11 @@ class MarkerBoundaryAtMaxPayloadTests(unittest.TestCase):
         client = MagicMock()
         client.search_issues.return_value = []
         client.create_issue.return_value = {"id": "issue-huge", "status": "todo"}
+        collection = MagicMock()
+        collection.update_one.return_value = MagicMock(matched_count=1)
 
         intent = make_create_intent(idempotency_key="create:fp-huge:0", body="x" * 50000)
-        consumer.dispatch_create(client, config, intent)
+        consumer.dispatch_create(client, config, collection, intent, "worker-a")
 
         body = client.create_issue.call_args[0][0]
         self.assertLessEqual(len(body["description"]), consumer.MAX_DESCRIPTION_CHARS)
@@ -321,6 +348,8 @@ class MarkerBoundaryAtMaxPayloadTests(unittest.TestCase):
         client = MagicMock()
         client.list_comments.return_value = []
         config = make_config()
+        collection = MagicMock()
+        collection.update_one.return_value = MagicMock(matched_count=1)
         intent = {
             "id": "intent-2",
             "workspaceId": "workspace-1",
@@ -329,7 +358,7 @@ class MarkerBoundaryAtMaxPayloadTests(unittest.TestCase):
             "payload": {"body": "x" * 50000},
             "targetsExternalIssueId": "issue-1",
         }
-        consumer.dispatch_update(client, config, intent)
+        consumer.dispatch_update(client, config, collection, intent, "worker-a")
 
         posted_body = client.post_comment.call_args[0][1]
         self.assertLessEqual(len(posted_body), consumer.MAX_DESCRIPTION_CHARS)
@@ -341,6 +370,7 @@ class MarkerBoundaryAtMaxPayloadTests(unittest.TestCase):
         config = make_config()
         collection = MagicMock()
         collection.find_one.return_value = {"id": "intent-1", "externalIssueId": "issue-1"}
+        collection.update_one.return_value = MagicMock(matched_count=1)
         intent = {
             "id": "intent-3",
             "workspaceId": "workspace-1",
@@ -349,7 +379,7 @@ class MarkerBoundaryAtMaxPayloadTests(unittest.TestCase):
             "supersedesIntentId": "intent-1",
             "payload": {"resolutionNote": "x" * 50000},
         }
-        consumer.dispatch_supersession(client, config, collection, intent)
+        consumer.dispatch_supersession(client, config, collection, intent, "worker-a")
 
         patch_body = client.patch_issue.call_args[0][1]
         self.assertLessEqual(len(patch_body["comment"]), consumer.MAX_DESCRIPTION_CHARS)
@@ -517,6 +547,100 @@ class StaleWorkerClaimScopingTests(unittest.TestCase):
         self.assertEqual(collection.doc["deliveryState"], consumer.DELIVERY_STATE_ACKNOWLEDGED)
         consumer.release_claim(collection, "intent-1", "workspace-1", "worker-b")
         self.assertNotIn("claimOwner", collection.doc)
+
+
+class ExpiredLeaseDuringDispatchRegressionTests(unittest.TestCase):
+    """REVA-27715 review round 4 finding #1: a lease that expires between
+    worker A's marker lookup and its remote create call must not allow two
+    workers to both create the real issue. Simulates A pausing immediately
+    after its marker search returns empty, worker B fully reclaiming and
+    dispatching in the interim, and A resuming afterward — exactly the
+    scenario the review comment described."""
+
+    def test_worker_a_paused_after_marker_lookup_cannot_duplicate_worker_bs_create(self):
+        config = make_config()
+        collection = FakeIntentCollection(
+            {
+                "id": "intent-1",
+                "workspaceId": "workspace-1",
+                "deliveryState": consumer.DELIVERY_STATE_PENDING,
+                "idempotencyKey": "create:fp-race:0",
+            }
+        )
+        intent = make_create_intent(idempotency_key="create:fp-race:0")
+
+        client_a = MagicMock()
+        client_b = MagicMock()
+        client_b.search_issues.return_value = []
+        client_b.create_issue.return_value = {"id": "issue-race", "status": "todo"}
+
+        def a_marker_lookup_pauses_and_lets_b_run(_query):
+            # Simulate worker A stalling right after this network call is
+            # dispatched: A's claim lease expires, worker B reclaims the
+            # same intent, and fully processes it (dispatch + acknowledge +
+            # release) before A's own call returns.
+            collection.doc["claimLeaseExpiresAt"] = "1970-01-01T00:00:00+00:00"
+            outcome_b = consumer.process_intent(client_b, config, collection, intent, owner="worker-b")
+            self.assertEqual(outcome_b, "acknowledged")
+            return []  # A's own (now-stale) search still sees no marker yet
+
+        client_a.search_issues.side_effect = a_marker_lookup_pauses_and_lets_b_run
+
+        outcome_a = consumer.process_intent(client_a, config, collection, intent, owner="worker-a")
+
+        self.assertEqual(outcome_a, "lost_claim")
+        client_a.create_issue.assert_not_called()
+        client_b.create_issue.assert_called_once()
+        self.assertEqual(collection.doc["deliveryState"], consumer.DELIVERY_STATE_ACKNOWLEDGED)
+        self.assertEqual(collection.doc["externalIssueId"], "issue-race")
+
+    def test_dispatch_started_blocks_reclaim_until_grace_period_elapses(self):
+        """Once a worker has recorded dispatchStartedAt, an ordinary claim
+        lease expiry alone must not let another worker reclaim — only the
+        much longer DISPATCH_RECLAIM_GRACE_SECONDS grace period does."""
+        collection = FakeIntentCollection(
+            {"id": "intent-1", "workspaceId": "workspace-1", "deliveryState": consumer.DELIVERY_STATE_PENDING}
+        )
+        claimed_a = consumer.claim_intent(collection, "intent-1", "workspace-1", "worker-a")
+        self.assertIsNotNone(claimed_a)
+        self.assertTrue(consumer.mark_dispatch_started(collection, "intent-1", "workspace-1", "worker-a"))
+
+        # Ordinary lease expired, but dispatch just started: B must not reclaim.
+        collection.doc["claimLeaseExpiresAt"] = "1970-01-01T00:00:00+00:00"
+        self.assertIsNone(consumer.claim_intent(collection, "intent-1", "workspace-1", "worker-b"))
+
+        # Dispatch started long enough ago (older than the grace period): B may reclaim.
+        collection.doc["dispatchStartedAt"] = "1970-01-01T00:00:00+00:00"
+        claimed_b = consumer.claim_intent(collection, "intent-1", "workspace-1", "worker-b")
+        self.assertIsNotNone(claimed_b)
+        self.assertEqual(collection.doc["claimOwner"], "worker-b")
+
+
+class ProcessIntentLostClaimTests(unittest.TestCase):
+    """REVA-27715 review round 4 finding #2: a stale worker whose remote
+    call succeeded but whose terminal write loses the race must be reported
+    distinctly, not folded into "acknowledged"."""
+
+    def test_stale_worker_successful_dispatch_reports_lost_claim_not_acknowledged(self):
+        config = make_config()
+        client = MagicMock()
+        client.search_issues.return_value = []
+        client.create_issue.return_value = {"id": "issue-1", "status": "todo"}
+        collection = MagicMock()
+        collection.find_one_and_update.return_value = {"id": "intent-1", "workspaceId": "workspace-1"}
+
+        def update_one_side_effect(_filt, update):
+            if update.get("$set", {}).get("deliveryState") == consumer.DELIVERY_STATE_ACKNOWLEDGED:
+                return MagicMock(matched_count=0)
+            return MagicMock(matched_count=1)
+
+        collection.update_one.side_effect = update_one_side_effect
+
+        intent = make_create_intent()
+        outcome = consumer.process_intent(client, config, collection, intent, owner="worker-a")
+
+        self.assertEqual(outcome, "lost_claim")
+        client.create_issue.assert_called_once()
 
 
 if __name__ == "__main__":

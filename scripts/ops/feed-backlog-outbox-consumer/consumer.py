@@ -72,6 +72,14 @@ MAX_LAST_ERROR_CHARS = 512
 MAX_DESCRIPTION_CHARS = 20000
 DEFAULT_BATCH_LIMIT = 25
 CLAIM_LEASE_SECONDS = 300
+# Once a worker has recorded that it started a remote dispatch call
+# (`dispatchStartedAt`), no other worker may reclaim the intent until this
+# much longer grace period has elapsed, even if the ordinary claim lease
+# has expired. This is deliberately far larger than any single HTTP call
+# (the Paperclip client uses a 20s timeout) so a live in-flight dispatch is
+# never preempted; a worker that is truly dead still frees the intent for
+# reclaim eventually.
+DISPATCH_RECLAIM_GRACE_SECONDS = 1800
 
 MARKER_TEMPLATE = "<!-- outbox-intent:{key} -->"
 MARKER_RE = re.compile(r"<!-- outbox-intent:(?P<key>\S+?) -->")
@@ -123,6 +131,12 @@ class DispositionError(Exception):
 class DeferIntent(Exception):
     """The intent isn't ready yet (a dependency hasn't been acknowledged);
     leave it pending untouched for a later cycle."""
+
+
+class LostClaimError(Exception):
+    """This worker's claim was superseded by another worker between
+    claim_intent and the point of remote dispatch. The remote Paperclip
+    mutation must NOT be attempted when this is raised."""
 
 
 @dataclass(frozen=True)
@@ -299,7 +313,24 @@ def render_description(payload: Dict[str, Any], idempotency_key: str, intent: Di
 # Per-kind dispatch. Each returns (externalIssueId, externalIssueStatus)
 # or raises DeferIntent / propagates for the caller to mark failed.
 # --------------------------------------------------------------------- #
-def dispatch_create(client: PaperclipClient, config: ConsumerConfig, intent: Dict[str, Any]) -> Tuple[str, str]:
+def _fence_dispatch(collection: Collection, intent: Dict[str, Any], owner: str) -> None:
+    """Must be called immediately before the remote Paperclip mutation in
+    every dispatch_* function, after the pre-existing-marker check and
+    after all local, non-mutating computation. Atomically re-verifies (via
+    a single Mongo write scoped to `claimOwner: owner`) that this worker
+    still owns the claim at the last possible moment before the network
+    call. If the claim was lost — e.g. this worker stalled between its
+    marker search and this point long enough for its lease to expire and a
+    newer worker to legitimately reclaim and fully dispatch — this raises
+    LostClaimError instead of allowing a second remote mutation for the
+    same intent (REVA-27715 review round 4 finding #1)."""
+    if not mark_dispatch_started(collection, intent["id"], intent["workspaceId"], owner):
+        raise LostClaimError(f"claim lost before remote dispatch for intent {intent['id']}")
+
+
+def dispatch_create(
+    client: PaperclipClient, config: ConsumerConfig, collection: Collection, intent: Dict[str, Any], owner: str
+) -> Tuple[str, str]:
     payload = intent.get("payload") or {}
     idempotency_key = intent["idempotencyKey"]
 
@@ -321,11 +352,14 @@ def dispatch_create(client: PaperclipClient, config: ConsumerConfig, intent: Dic
         body["parentId"] = payload["parentId"]
     body = {key: value for key, value in body.items() if value is not None}
 
+    _fence_dispatch(collection, intent, owner)
     created = client.create_issue(body)
     return created["id"], created.get("status", "todo")
 
 
-def dispatch_update(client: PaperclipClient, config: ConsumerConfig, intent: Dict[str, Any]) -> Tuple[str, str]:
+def dispatch_update(
+    client: PaperclipClient, config: ConsumerConfig, collection: Collection, intent: Dict[str, Any], owner: str
+) -> Tuple[str, str]:
     payload = intent.get("payload") or {}
     target_id = intent.get("targetsExternalIssueId")
     if not target_id:
@@ -338,12 +372,14 @@ def dispatch_update(client: PaperclipClient, config: ConsumerConfig, intent: Dic
 
     comment_body = str(payload.get("body") or payload.get("description") or "Feed evidence update.")
     comment_body = embed_marker_bounded(comment_body, idempotency_key, MAX_DESCRIPTION_CHARS)
+
+    _fence_dispatch(collection, intent, owner)
     client.post_comment(target_id, comment_body)
     return target_id, "updated"
 
 
 def dispatch_supersession(
-    client: PaperclipClient, config: ConsumerConfig, collection: Collection, intent: Dict[str, Any]
+    client: PaperclipClient, config: ConsumerConfig, collection: Collection, intent: Dict[str, Any], owner: str
 ) -> Tuple[str, str]:
     payload = intent.get("payload") or {}
     superseded_intent_id = intent.get("supersedesIntentId")
@@ -362,11 +398,15 @@ def dispatch_supersession(
 
     note = str(payload.get("resolutionNote") or payload.get("body") or "Superseded by a newer executable intent.")
     comment = embed_marker_bounded(note, idempotency_key, MAX_DESCRIPTION_CHARS)
+
+    _fence_dispatch(collection, intent, owner)
     client.patch_issue(superseded_external_id, {"status": "done", "comment": comment})
     return superseded_external_id, "done"
 
 
-def dispatch_escalation(client: PaperclipClient, config: ConsumerConfig, intent: Dict[str, Any]) -> Tuple[str, str]:
+def dispatch_escalation(
+    client: PaperclipClient, config: ConsumerConfig, collection: Collection, intent: Dict[str, Any], owner: str
+) -> Tuple[str, str]:
     payload = intent.get("payload") or {}
     idempotency_key = intent["idempotencyKey"]
 
@@ -386,6 +426,7 @@ def dispatch_escalation(client: PaperclipClient, config: ConsumerConfig, intent:
         body["assigneeAgentId"] = assignee
     body = {key: value for key, value in body.items() if value is not None}
 
+    _fence_dispatch(collection, intent, owner)
     created = client.create_issue(body)
     return created["id"], created.get("status", "todo")
 
@@ -411,27 +452,64 @@ def claim_intent(
     """Atomically claim a pending intent before any remote dispatch, so two
     concurrent consumer invocations can't both observe the same unclaimed
     pending intent and both issue the remote mutation (REVA-27715 review
-    finding #2). Matches only if the intent is still pending AND either
-    unclaimed or its previous claim's lease has already expired (covers a
-    worker that crashed mid-dispatch without releasing). The atomicity
-    comes from Mongo's single-document find_one_and_update, not from any
-    read-then-write in this process."""
-    now_iso = _iso_now()
-    lease_expires_at = (datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)).isoformat()
+    finding #2). Matches only if the intent is still pending AND either:
+    unclaimed; or its previous claim's ordinary lease has expired AND that
+    worker never reached the point of starting a remote dispatch call
+    (`dispatchStartedAt` unset); or a remote dispatch was started but
+    DISPATCH_RECLAIM_GRACE_SECONDS have passed since (covers a worker that
+    genuinely crashed mid-dispatch). This last condition is what stops a
+    worker whose ordinary claim lease merely expired *during* an in-flight
+    remote call from being preempted by a reclaim — see `_fence_dispatch`
+    for the other half of this protection (REVA-27715 review round 4
+    finding #1). The atomicity comes from Mongo's single-document
+    find_one_and_update, not from any read-then-write in this process."""
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    dispatch_grace_cutoff_iso = (now - timedelta(seconds=DISPATCH_RECLAIM_GRACE_SECONDS)).isoformat()
+    lease_expires_at = (now + timedelta(seconds=lease_seconds)).isoformat()
+    unclaimed = {"$or": [{"claimOwner": {"$exists": False}}, {"claimOwner": None}]}
+    dispatch_not_in_flight = {
+        "$or": [
+            {"dispatchStartedAt": {"$exists": False}},
+            {"dispatchStartedAt": None},
+            {"dispatchStartedAt": {"$lt": dispatch_grace_cutoff_iso}},
+        ]
+    }
+    # Sibling top-level keys in a Mongo filter document are implicitly
+    # ANDed, so merging the lease-expiry field predicate with the
+    # dispatch_not_in_flight $or clause here has the same effect as an
+    # explicit $and without needing one.
+    lease_expired_and_reclaimable = {"claimLeaseExpiresAt": {"$lt": now_iso}, **dispatch_not_in_flight}
     return collection.find_one_and_update(
         {
             "id": intent_id,
             "workspaceId": workspace_id,
             "deliveryState": DELIVERY_STATE_PENDING,
-            "$or": [
-                {"claimOwner": {"$exists": False}},
-                {"claimOwner": None},
-                {"claimLeaseExpiresAt": {"$lt": now_iso}},
-            ],
+            "$or": [unclaimed, lease_expired_and_reclaimable],
         },
-        {"$set": {"claimOwner": owner, "claimedAt": now_iso, "claimLeaseExpiresAt": lease_expires_at}},
+        {
+            "$set": {"claimOwner": owner, "claimedAt": now_iso, "claimLeaseExpiresAt": lease_expires_at},
+            "$unset": {"dispatchStartedAt": ""},
+        },
         return_document=ReturnDocument.AFTER,
     )
+
+
+def mark_dispatch_started(collection: Collection, intent_id: str, workspace_id: str, owner: str) -> bool:
+    """Atomically records that `owner` is about to make the remote
+    Paperclip call for this intent, scoped to `owner` still holding the
+    claim right now. Returns False (and the caller must NOT proceed to the
+    remote call) if the claim was already lost to a newer worker. This is
+    the fencing check that closes the non-atomic marker-search -> create
+    gap: without it, a worker that stalls after checking for an existing
+    marker has nothing stopping it from calling the remote API even after
+    its claim has been legitimately reclaimed (REVA-27715 review round 4
+    finding #1)."""
+    result = collection.update_one(
+        {"id": intent_id, "workspaceId": workspace_id, "claimOwner": owner},
+        {"$set": {"dispatchStartedAt": _iso_now()}},
+    )
+    return result.matched_count > 0
 
 
 def release_claim(collection: Collection, intent_id: str, workspace_id: str, owner: str) -> None:
@@ -443,7 +521,7 @@ def release_claim(collection: Collection, intent_id: str, workspace_id: str, own
     mid-dispatch (REVA-27715 review finding #3)."""
     collection.update_one(
         {"id": intent_id, "workspaceId": workspace_id, "claimOwner": owner},
-        {"$unset": {"claimOwner": "", "claimedAt": "", "claimLeaseExpiresAt": ""}},
+        {"$unset": {"claimOwner": "", "claimedAt": "", "claimLeaseExpiresAt": "", "dispatchStartedAt": ""}},
     )
 
 
@@ -507,7 +585,7 @@ def requeue_failed_intent(collection: Collection, intent_id: str, workspace_id: 
         {"id": intent_id, "workspaceId": workspace_id, "deliveryState": DELIVERY_STATE_FAILED},
         {
             "$set": {"deliveryState": DELIVERY_STATE_PENDING, "lastError": None, "updatedAt": _iso_now()},
-            "$unset": {"claimOwner": "", "claimedAt": "", "claimLeaseExpiresAt": ""},
+            "$unset": {"claimOwner": "", "claimedAt": "", "claimLeaseExpiresAt": "", "dispatchStartedAt": ""},
         },
     )
     return result.matched_count > 0
@@ -536,19 +614,27 @@ def process_intent(
 
     try:
         if kind == INTENT_KIND_CREATE:
-            external_id, external_status = dispatch_create(client, config, intent)
+            external_id, external_status = dispatch_create(client, config, collection, intent, owner)
         elif kind == INTENT_KIND_UPDATE:
-            external_id, external_status = dispatch_update(client, config, intent)
+            external_id, external_status = dispatch_update(client, config, collection, intent, owner)
         elif kind == INTENT_KIND_SUPERSESSION:
-            external_id, external_status = dispatch_supersession(client, config, collection, intent)
+            external_id, external_status = dispatch_supersession(client, config, collection, intent, owner)
         elif kind == INTENT_KIND_ESCALATION:
-            external_id, external_status = dispatch_escalation(client, config, intent)
+            external_id, external_status = dispatch_escalation(client, config, collection, intent, owner)
         else:
             raise DispositionError(f"unknown intentKind {kind!r}")
     except DeferIntent as exc:
         logger.info("deferring intent id=%s kind=%s: %s", intent_id, kind, exc)
         release_claim(collection, intent_id, workspace_id, owner)
         return "deferred"
+    except LostClaimError as exc:
+        # The claim was superseded by a newer worker before the remote
+        # mutation was attempted, so no Paperclip API call was made and
+        # nothing needs to be persisted. Do not release_claim here: it is
+        # scoped to `claimOwner: owner`, and this worker no longer holds
+        # that claim, so it would be a harmless no-op anyway.
+        logger.info("intent id=%s kind=%s lost its claim before remote dispatch: %s", intent_id, kind, exc)
+        return "lost_claim"
     except Exception as exc:  # noqa: BLE001 - every dispatch failure must be persisted, never silently dropped
         persisted = False
         try:
@@ -568,11 +654,18 @@ def process_intent(
     acked = mark_acknowledged(collection, intent_id, workspace_id, external_id, external_status, owner)
     release_claim(collection, intent_id, workspace_id, owner)
     if not acked:
+        # The remote mutation succeeded, but by the time we tried to
+        # persist that locally, a newer worker had already superseded this
+        # worker's claim (REVA-27715 review round 4 finding #2). This is
+        # NOT a successful acknowledgement from this worker's point of
+        # view: the newer worker's claim/state governs, and run statistics
+        # must not silently report success for a lost claim.
         logger.warning(
             "intent id=%s already resolved by a concurrent run; external_id=%s not re-applied locally",
             intent_id,
             external_id,
         )
+        return "lost_claim"
     return "acknowledged"
 
 
@@ -586,6 +679,7 @@ def run_once(config: ConsumerConfig, run_id: Optional[str] = None) -> Dict[str, 
         "deferred": 0,
         "failed": 0,
         "skipped_claimed": 0,
+        "lost_claim": 0,
     }
     for intent in fetch_pending_intents(collection, config.batch_limit):
         stats["pending_seen"] += 1
