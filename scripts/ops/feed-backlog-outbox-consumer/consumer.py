@@ -434,16 +434,30 @@ def claim_intent(
     )
 
 
-def release_claim(collection: Collection, intent_id: str, workspace_id: str) -> None:
+def release_claim(collection: Collection, intent_id: str, workspace_id: str, owner: str) -> None:
+    """Only clears the claim if `owner` still holds it. Without this scope,
+    a worker whose lease already expired (and was superseded by a newer
+    worker's claim_intent call) could still wipe that newer worker's live
+    claim when its own stalled dispatch finally returns, letting a third
+    worker claim the same intent while the second worker is still
+    mid-dispatch (REVA-27715 review finding #3)."""
     collection.update_one(
-        {"id": intent_id, "workspaceId": workspace_id},
+        {"id": intent_id, "workspaceId": workspace_id, "claimOwner": owner},
         {"$unset": {"claimOwner": "", "claimedAt": "", "claimLeaseExpiresAt": ""}},
     )
 
 
 def mark_acknowledged(
-    collection: Collection, intent_id: str, workspace_id: str, external_issue_id: str, external_status: str
+    collection: Collection,
+    intent_id: str,
+    workspace_id: str,
+    external_issue_id: str,
+    external_status: str,
+    owner: str,
 ) -> bool:
+    """Scoped to `claimOwner: owner` for the same reason as release_claim:
+    an expired worker's stale success must not overwrite state a newer
+    worker's claim now governs."""
     if not external_issue_id:
         raise ValueError("external_issue_id must be non-empty to acknowledge an intent")
     result = collection.update_one(
@@ -451,6 +465,7 @@ def mark_acknowledged(
             "id": intent_id,
             "workspaceId": workspace_id,
             "deliveryState": {"$in": [DELIVERY_STATE_PENDING, DELIVERY_STATE_FAILED]},
+            "claimOwner": owner,
         },
         {
             "$set": {
@@ -466,9 +481,15 @@ def mark_acknowledged(
     return result.matched_count > 0
 
 
-def mark_failed(collection: Collection, intent_id: str, workspace_id: str, error: Any) -> bool:
+def mark_failed(collection: Collection, intent_id: str, workspace_id: str, error: Any, owner: str) -> bool:
+    """Scoped to `claimOwner: owner` for the same reason as release_claim."""
     result = collection.update_one(
-        {"id": intent_id, "workspaceId": workspace_id, "deliveryState": DELIVERY_STATE_PENDING},
+        {
+            "id": intent_id,
+            "workspaceId": workspace_id,
+            "deliveryState": DELIVERY_STATE_PENDING,
+            "claimOwner": owner,
+        },
         {
             "$set": {
                 "deliveryState": DELIVERY_STATE_FAILED,
@@ -526,15 +547,15 @@ def process_intent(
             raise DispositionError(f"unknown intentKind {kind!r}")
     except DeferIntent as exc:
         logger.info("deferring intent id=%s kind=%s: %s", intent_id, kind, exc)
-        release_claim(collection, intent_id, workspace_id)
+        release_claim(collection, intent_id, workspace_id, owner)
         return "deferred"
     except Exception as exc:  # noqa: BLE001 - every dispatch failure must be persisted, never silently dropped
         persisted = False
         try:
-            persisted = mark_failed(collection, intent_id, workspace_id, exc)
+            persisted = mark_failed(collection, intent_id, workspace_id, exc, owner)
         except Exception:
             logger.exception("failed to persist failure state for intent id=%s", intent_id)
-        release_claim(collection, intent_id, workspace_id)
+        release_claim(collection, intent_id, workspace_id, owner)
         logger.error(
             "intent id=%s kind=%s dispatch failed (persisted=%s): %s",
             intent_id,
@@ -544,8 +565,8 @@ def process_intent(
         )
         return "failed"
 
-    acked = mark_acknowledged(collection, intent_id, workspace_id, external_id, external_status)
-    release_claim(collection, intent_id, workspace_id)
+    acked = mark_acknowledged(collection, intent_id, workspace_id, external_id, external_status, owner)
+    release_claim(collection, intent_id, workspace_id, owner)
     if not acked:
         logger.warning(
             "intent id=%s already resolved by a concurrent run; external_id=%s not re-applied locally",

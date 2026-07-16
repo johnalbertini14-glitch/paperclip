@@ -1,4 +1,5 @@
 import unittest
+from typing import Any, Dict
 from unittest.mock import MagicMock
 
 import consumer
@@ -205,31 +206,35 @@ class DispatchUpdateTests(unittest.TestCase):
 
 
 class MongoStateMachineTests(unittest.TestCase):
-    def test_mark_acknowledged_filter_scopes_to_workspace_and_allowed_states(self):
+    def test_mark_acknowledged_filter_scopes_to_workspace_allowed_states_and_owner(self):
         collection = MagicMock()
         collection.update_one.return_value = MagicMock(matched_count=1)
-        result = consumer.mark_acknowledged(collection, "intent-1", "workspace-1", "issue-1", "todo")
+        result = consumer.mark_acknowledged(collection, "intent-1", "workspace-1", "issue-1", "todo", "worker-a")
         self.assertTrue(result)
         filter_arg, update_arg = collection.update_one.call_args[0]
         self.assertEqual(filter_arg["id"], "intent-1")
         self.assertEqual(filter_arg["workspaceId"], "workspace-1")
         self.assertEqual(set(filter_arg["deliveryState"]["$in"]), {"pending", "failed"})
+        self.assertEqual(filter_arg["claimOwner"], "worker-a")
         self.assertEqual(update_arg["$set"]["deliveryState"], "acknowledged")
         self.assertEqual(update_arg["$set"]["externalIssueId"], "issue-1")
 
     def test_mark_acknowledged_rejects_empty_external_id(self):
         collection = MagicMock()
         with self.assertRaises(ValueError):
-            consumer.mark_acknowledged(collection, "intent-1", "workspace-1", "", "todo")
+            consumer.mark_acknowledged(collection, "intent-1", "workspace-1", "", "todo", "worker-a")
         collection.update_one.assert_not_called()
 
-    def test_mark_failed_only_from_pending_and_redacts_error(self):
+    def test_mark_failed_only_from_pending_scoped_to_owner_and_redacts_error(self):
         collection = MagicMock()
         collection.update_one.return_value = MagicMock(matched_count=1)
-        result = consumer.mark_failed(collection, "intent-1", "workspace-1", "boom: token abcd1234efgh5678ijkl")
+        result = consumer.mark_failed(
+            collection, "intent-1", "workspace-1", "boom: token abcd1234efgh5678ijkl", "worker-a"
+        )
         self.assertTrue(result)
         filter_arg, update_arg = collection.update_one.call_args[0]
         self.assertEqual(filter_arg["deliveryState"], "pending")
+        self.assertEqual(filter_arg["claimOwner"], "worker-a")
         self.assertNotIn("abcd1234efgh5678ijkl", update_arg["$set"]["lastError"])
 
     def test_requeue_only_from_failed(self):
@@ -374,12 +379,13 @@ class ClaimTests(unittest.TestCase):
         result = consumer.claim_intent(collection, "intent-1", "workspace-1", "worker-b")
         self.assertIsNone(result)
 
-    def test_release_claim_unsets_claim_fields_scoped_to_intent(self):
+    def test_release_claim_unsets_claim_fields_scoped_to_intent_and_owner(self):
         collection = MagicMock()
-        consumer.release_claim(collection, "intent-1", "workspace-1")
+        consumer.release_claim(collection, "intent-1", "workspace-1", "worker-a")
         filter_arg, update_arg = collection.update_one.call_args[0]
         self.assertEqual(filter_arg["id"], "intent-1")
         self.assertEqual(filter_arg["workspaceId"], "workspace-1")
+        self.assertEqual(filter_arg["claimOwner"], "worker-a")
         self.assertIn("claimOwner", update_arg["$unset"])
 
 
@@ -411,6 +417,106 @@ class ConcurrencyRegressionTests(unittest.TestCase):
         self.assertEqual(outcome_b, "skipped_claimed")
         client.create_issue.assert_called_once()  # still only once total
         client.search_issues.assert_called_once()  # worker B never re-dispatched
+
+
+class FakeIntentCollection:
+    """Minimal single-document Mongo-like fake that honors the filter
+    semantics this module actually relies on ($or, $exists, $in, $lt, plain
+    equality) instead of a MagicMock that returns matched_count=1
+    unconditionally. Used to prove the claimOwner-scoping fix behaves like
+    real Mongo would for a single document under a concurrency race,
+    without requiring a live Mongo server."""
+
+    def __init__(self, doc):
+        self.doc: Dict[str, Any] = dict(doc)
+
+    def _matches(self, filt: Dict[str, Any]) -> bool:
+        for key, cond in filt.items():
+            if key == "$or":
+                if not any(self._matches(sub) for sub in cond):
+                    return False
+                continue
+            actual = self.doc.get(key)
+            if isinstance(cond, dict):
+                if "$exists" in cond and (key in self.doc) != cond["$exists"]:
+                    return False
+                if "$in" in cond and actual not in cond["$in"]:
+                    return False
+                if "$lt" in cond and not (actual is not None and actual < cond["$lt"]):
+                    return False
+            elif actual != cond:
+                return False
+        return True
+
+    def _apply(self, update: Dict[str, Any]) -> None:
+        for key, value in update.get("$set", {}).items():
+            self.doc[key] = value
+        for key in update.get("$unset", {}):
+            self.doc.pop(key, None)
+        for key, value in update.get("$inc", {}).items():
+            self.doc[key] = self.doc.get(key, 0) + value
+
+    def find_one_and_update(self, filt, update, return_document=None):
+        if not self._matches(filt):
+            return None
+        self._apply(update)
+        return dict(self.doc)
+
+    def update_one(self, filt, update):
+        matched = self._matches(filt)
+        if matched:
+            self._apply(update)
+        return MagicMock(matched_count=1 if matched else 0)
+
+
+class StaleWorkerClaimScopingTests(unittest.TestCase):
+    """REVA-27715 review finding #3: an expired worker's terminal write
+    (release/acknowledge/fail) must not affect a newer worker's live claim
+    on the same intent. Simulates: worker A claims with an already-expired
+    lease, worker B then legitimately reclaims the same intent while A is
+    still (unrealistically slowly) mid-dispatch, and A finally returns."""
+
+    def _seeded_collection(self):
+        collection = FakeIntentCollection(
+            {"id": "intent-1", "workspaceId": "workspace-1", "deliveryState": consumer.DELIVERY_STATE_PENDING}
+        )
+        claimed_a = consumer.claim_intent(collection, "intent-1", "workspace-1", "worker-a", lease_seconds=-1)
+        self.assertIsNotNone(claimed_a, "worker A must win the initial claim")
+        claimed_b = consumer.claim_intent(collection, "intent-1", "workspace-1", "worker-b")
+        self.assertIsNotNone(claimed_b, "worker B must be able to reclaim after A's lease expired")
+        self.assertEqual(collection.doc["claimOwner"], "worker-b")
+        return collection
+
+    def test_expired_worker_cannot_release_a_newer_workers_claim(self):
+        collection = self._seeded_collection()
+        consumer.release_claim(collection, "intent-1", "workspace-1", "worker-a")
+        self.assertEqual(collection.doc["claimOwner"], "worker-b")
+
+    def test_expired_worker_cannot_acknowledge_over_a_newer_workers_claim(self):
+        collection = self._seeded_collection()
+        acked = consumer.mark_acknowledged(
+            collection, "intent-1", "workspace-1", "issue-stale", "todo", "worker-a"
+        )
+        self.assertFalse(acked)
+        self.assertEqual(collection.doc["deliveryState"], consumer.DELIVERY_STATE_PENDING)
+        self.assertEqual(collection.doc["claimOwner"], "worker-b")
+
+    def test_expired_worker_cannot_mark_failed_over_a_newer_workers_claim(self):
+        collection = self._seeded_collection()
+        marked = consumer.mark_failed(collection, "intent-1", "workspace-1", "boom", "worker-a")
+        self.assertFalse(marked)
+        self.assertEqual(collection.doc["deliveryState"], consumer.DELIVERY_STATE_PENDING)
+        self.assertEqual(collection.doc["claimOwner"], "worker-b")
+
+    def test_current_owner_can_still_release_and_acknowledge_normally(self):
+        collection = self._seeded_collection()
+        acked = consumer.mark_acknowledged(
+            collection, "intent-1", "workspace-1", "issue-real", "todo", "worker-b"
+        )
+        self.assertTrue(acked)
+        self.assertEqual(collection.doc["deliveryState"], consumer.DELIVERY_STATE_ACKNOWLEDGED)
+        consumer.release_claim(collection, "intent-1", "workspace-1", "worker-b")
+        self.assertNotIn("claimOwner", collection.doc)
 
 
 if __name__ == "__main__":

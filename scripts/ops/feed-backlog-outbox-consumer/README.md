@@ -63,6 +63,16 @@ cycle without touching the Paperclip API. The claim is released
 (`release_claim`) on every exit path — deferred, failed, or acknowledged —
 so a legitimate retry isn't blocked waiting out the full lease.
 
+Every terminal write (`release_claim`, `mark_acknowledged`, `mark_failed`)
+additionally filters on `claimOwner: <this worker's owner token>`. This
+matters for the case where a worker's lease has already expired and a
+newer worker has legitimately reclaimed the same intent while the first
+worker is still stuck mid-dispatch (e.g. a hung remote call): without the
+owner scope, the stale worker's eventual return could wipe or overwrite
+the newer worker's live claim/state. With it, a stale worker's write
+matches zero documents and is a no-op — the newer worker's claim and any
+state it produces are left untouched.
+
 ## Required environment variables (names only)
 
 | Variable | Purpose |
