@@ -41,6 +41,7 @@ Optional environment variables:
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
@@ -50,6 +51,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 from pymongo import MongoClient, ReturnDocument
@@ -122,6 +124,21 @@ def safe_error_summary(error: Any) -> str:
     text = _SHORT_OPAQUE_PATTERN.sub("<short_token>", text)
     text = _DIGIT_RUN_PATTERN.sub("<long_id>", text)
     return text[:MAX_LAST_ERROR_CHARS]
+
+
+def sanitize_operator_note(note: str) -> str:
+    """Persist a bounded note without URI userinfo or credential-shaped text."""
+    def redact_uri(match: re.Match[str]) -> str:
+        parsed = urlsplit(match.group(0))
+        if parsed.username is None and parsed.password is None:
+            return match.group(0)
+        host = parsed.hostname or ""
+        if parsed.port is not None:
+            host = f"{host}:{parsed.port}"
+        return urlunsplit((parsed.scheme, host, parsed.path, parsed.query, parsed.fragment))
+
+    without_userinfo = re.sub(r"https?://[^\s]+", redact_uri, note)
+    return safe_error_summary(without_userinfo)
 
 
 def _iso_now() -> str:
@@ -449,7 +466,9 @@ def dispatch_supersession(
     if not superseded_intent_id:
         raise DispositionError("supersession intent missing supersedesIntentId")
 
-    superseded_intent = collection.find_one({"id": superseded_intent_id})
+    superseded_intent = collection.find_one(
+        {"id": superseded_intent_id, "workspaceId": intent["workspaceId"]}
+    )
     superseded_external_id = (superseded_intent or {}).get("externalIssueId")
     if not superseded_external_id:
         raise DeferIntent("superseded intent not yet acknowledged; no externalIssueId to close")
@@ -505,7 +524,17 @@ def dispatch_escalation(
 # --------------------------------------------------------------------- #
 def get_collection(config: ConsumerConfig) -> Collection:
     client: MongoClient = MongoClient(config.mongo_url, serverSelectionTimeoutMS=10000)
-    return client[config.db_name][OUTBOX_COLLECTION_NAME]
+    collection = client[config.db_name][OUTBOX_COLLECTION_NAME]
+    # Retain the owning client on the collection so CLI commands can close it
+    # deterministically after a one-shot operation.
+    setattr(collection, "_feed_backlog_client", client)
+    return collection
+
+
+def close_collection(collection: Collection) -> None:
+    client = getattr(collection, "_feed_backlog_client", None)
+    if client is not None:
+        client.close()
 
 
 def fetch_pending_intents(collection: Collection, limit: int) -> List[Dict[str, Any]]:
@@ -591,8 +620,29 @@ def release_claim(collection: Collection, intent_id: str, workspace_id: str, own
     )
 
 
+def verify_remote_marker_state(
+    client: PaperclipClient, idempotency_key: str
+) -> Dict[str, Any]:
+    matches = [
+        candidate
+        for candidate in client.search_issues(idempotency_key)
+        if find_marker(candidate.get("description")) == idempotency_key
+    ]
+    return {
+        "idempotencyKey": idempotency_key,
+        "issueCount": len(matches),
+        "issueIds": [str(candidate.get("id")) for candidate in matches if candidate.get("id")],
+        "verifiedAt": _iso_now(),
+    }
+
+
 def force_release_stuck_dispatch(
-    collection: Collection, intent_id: str, workspace_id: str, expected_owner: str, operator_note: str
+    collection: Collection,
+    intent_id: str,
+    workspace_id: str,
+    expected_owner: str,
+    operator_note: str,
+    verified_marker_state: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """The deliberate, human-invoked recovery path for an intent whose
     `dispatchStartedAt` is set and will therefore never be reclaimed
@@ -610,6 +660,8 @@ def force_release_stuck_dispatch(
     rather than a double-clear."""
     if not operator_note.strip():
         raise ValueError("operator_note is required to force-release a stuck dispatch claim")
+    if verified_marker_state is None:
+        raise ValueError("verified_marker_state is required to force-release a stuck dispatch claim")
     result = collection.update_one(
         {
             "id": intent_id,
@@ -622,7 +674,8 @@ def force_release_stuck_dispatch(
             "$push": {
                 "forceReleaseLog": {
                     "releasedOwner": expected_owner,
-                    "note": safe_error_summary(operator_note),
+                    "note": sanitize_operator_note(operator_note),
+                    "verifiedMarkerState": verified_marker_state,
                     "at": _iso_now(),
                 }
             },
@@ -777,34 +830,275 @@ def process_intent(
 
 def run_once(config: ConsumerConfig, run_id: Optional[str] = None) -> Dict[str, int]:
     collection = get_collection(config)
-    client = PaperclipClient(config, run_id=run_id)
-    owner = run_id or f"pid:{os.getpid()}:{uuid.uuid4().hex[:8]}"
-    stats: Dict[str, int] = {
-        "pending_seen": 0,
-        "acknowledged": 0,
-        "deferred": 0,
-        "failed": 0,
-        "skipped_claimed": 0,
-        "lost_claim": 0,
-    }
-    for intent in fetch_pending_intents(collection, config.batch_limit):
-        stats["pending_seen"] += 1
-        outcome = process_intent(client, config, collection, intent, owner=owner)
-        stats[outcome] = stats.get(outcome, 0) + 1
-    return stats
+    try:
+        client = PaperclipClient(config, run_id=run_id)
+        owner = run_id or f"pid:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+        stats: Dict[str, int] = {
+            "pending_seen": 0,
+            "acknowledged": 0,
+            "deferred": 0,
+            "failed": 0,
+            "skipped_claimed": 0,
+            "lost_claim": 0,
+        }
+        for intent in fetch_pending_intents(collection, config.batch_limit):
+            stats["pending_seen"] += 1
+            outcome = process_intent(client, config, collection, intent, owner=owner)
+            stats[outcome] = stats.get(outcome, 0) + 1
+        return stats
+    finally:
+        close_collection(collection)
 
 
-def main() -> int:
+def _cmd_run(args: argparse.Namespace, config: ConsumerConfig) -> int:
+    """Run a single one-shot consumer cycle (the default subcommand).
+
+    A single cycle processes up to `FEED_BACKLOG_CONSUMER_BATCH_LIMIT`
+    pending intents and exits -- this is intentionally not a long-running
+    daemon. It is meant to be invoked on a schedule (cron / Paperclip
+    routine) by whichever team owns the credential binding; no
+    Paperclip/Hermes runtime restart or new service process is
+    authorized by board approval `e95d6c05` for this change.
+    """
+    stats = run_once(config, run_id=os.environ.get("PAPERCLIP_RUN_ID"))
+    logger.info("consumer cycle complete: %s", json.dumps(stats))
+    # Always print the stats as the last JSON line on stdout so an
+    # operator (or scheduler) can scrape the cycle outcome without
+    # having to grep the log stream.
+    print(json.dumps(stats))
+    return 0
+
+
+def _cmd_recover_stuck(args: argparse.Namespace, config: ConsumerConfig) -> int:
+    """Deliberately clear a stuck dispatch claim.
+
+    An intent whose `dispatchStartedAt` is set will never be reclaimed
+    automatically (see `claim_intent`'s docstring and REVA-27715 round 6).
+    The only sanctioned recovery is this operator action. The operator
+    MUST supply `--operator-note` (non-empty) recording the out-of-band
+    confirmation that real remote state has been checked (typically:
+    search Paperclip for the intent's idempotency marker and note whether
+    an issue already exists) -- a stuck claim can never be cleared
+    silently. `--expected-owner` MUST match the worker that currently
+    holds the claim; the Mongo update is scoped to that owner so a
+    second concurrent force-release attempt is a safe no-op rather than
+    a double-clear.
+
+    Exit codes:
+        0 -- matched and cleared (the Mongo update modified one document)
+        2 -- no match (the intent is no longer held by `--expected-owner`,
+             or its `dispatchStartedAt` is no longer set -- this is a
+             safe no-op; the operator should re-check why they believed
+             the dispatch was stuck)
+        3 -- invalid invocation (empty operator note, missing required
+             flag, etc.)
+    """
+    operator_note = (args.operator_note or "").strip()
+    if not operator_note:
+        logger.error("refusing to force-release: --operator-note is required and must be non-empty")
+        return 3
+    if not args.intent_id or not args.workspace_id or not args.expected_owner:
+        logger.error(
+            "refusing to force-release: --intent-id, --workspace-id, and --expected-owner are all required"
+        )
+        return 3
+
+    # Honor a dry-run request without touching Mongo. Useful for an
+    # operator who wants to confirm the discovery query before committing.
+    if args.dry_run:
+        collection = get_collection(config)
+        try:
+            existing = collection.find_one(
+                {
+                    "id": args.intent_id,
+                    "workspaceId": args.workspace_id,
+                    "claimOwner": args.expected_owner,
+                    "dispatchStartedAt": {"$exists": True, "$ne": None},
+                },
+                projection={"_id": 1, "id": 1, "workspaceId": 1, "intentKind": 1, "claimOwner": 1, "dispatchStartedAt": 1, "claimedAt": 1, "deliveryState": 1},
+            )
+        finally:
+            close_collection(collection)
+        if existing is None:
+            print(
+                json.dumps(
+                    {
+                        "outcome": "no_match",
+                        "intent_id": args.intent_id,
+                        "workspace_id": args.workspace_id,
+                        "expected_owner": args.expected_owner,
+                        "message": "no intent matches the requested stuck-dispatch filter; nothing to release",
+                    }
+                )
+            )
+            return 2
+        print(
+            json.dumps(
+                {
+                    "outcome": "would_release",
+                    "intent_id": existing.get("id"),
+                    "workspace_id": existing.get("workspaceId"),
+                    "intent_kind": existing.get("intentKind"),
+                    "claim_owner": existing.get("claimOwner"),
+                    "dispatch_started_at": existing.get("dispatchStartedAt"),
+                    "claimed_at": existing.get("claimedAt"),
+                    "delivery_state": existing.get("deliveryState"),
+                    "operator_note_was": operator_note,
+                },
+                default=str,
+            )
+        )
+        return 0
+
+    collection = get_collection(config)
+    try:
+        existing = collection.find_one(
+            {
+                "id": args.intent_id,
+                "workspaceId": args.workspace_id,
+                "claimOwner": args.expected_owner,
+                "dispatchStartedAt": {"$exists": True, "$ne": None},
+            }
+        )
+        if existing is None:
+            released = False
+        else:
+            idempotency_key = existing.get("idempotencyKey")
+            if not idempotency_key:
+                logger.error("refusing to force-release: persisted intent has no idempotencyKey")
+                return 3
+            verified_marker_state = verify_remote_marker_state(
+                PaperclipClient(config, run_id=os.environ.get("PAPERCLIP_RUN_ID")), idempotency_key
+            )
+            released = force_release_stuck_dispatch(
+                collection=collection,
+                intent_id=args.intent_id,
+                workspace_id=args.workspace_id,
+                expected_owner=args.expected_owner,
+                operator_note=operator_note,
+                verified_marker_state=verified_marker_state,
+            )
+    finally:
+        close_collection(collection)
+    if not released:
+        print(
+            json.dumps(
+                {
+                    "outcome": "no_match",
+                    "intent_id": args.intent_id,
+                    "workspace_id": args.workspace_id,
+                    "expected_owner": args.expected_owner,
+                    "message": "no intent matches the requested stuck-dispatch filter; nothing was released",
+                }
+            )
+        )
+        logger.warning("force-release was a no-op (no matching stuck intent)")
+        return 2
+    print(
+        json.dumps(
+            {
+                "outcome": "released",
+                "intent_id": args.intent_id,
+                "workspace_id": args.workspace_id,
+                "expected_owner": args.expected_owner,
+            }
+        )
+    )
+    logger.info("force-released stuck dispatch: intent_id=%s owner=%s", args.intent_id, args.expected_owner)
+    return 0
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="consumer.py",
+        description=(
+            "Feed-backlog outbox consumer (REVA-27715 / REVA-27685). "
+            "Reads pending intents from the durable `gtm_backlog_outbox` "
+            "collection in product Mongo and renders them to real "
+            "Paperclip issues, OR clears a stuck dispatch claim with the "
+            "sanctioned operator recovery action."
+        ),
+    )
+    subparsers = parser.add_subparsers(dest="command", required=False)
+
+    run = subparsers.add_parser(
+        "run",
+        help="Process up to FEED_BACKLOG_CONSUMER_BATCH_LIMIT pending intents and exit (default).",
+        description=(
+            "One-shot batch consumer cycle. Reads pending intents from "
+            "Mongo, atomically claims each, dispatches via the Paperclip "
+            "API, and writes acknowledgement/failure back. Exits when the "
+            "batch is drained or the batch limit is reached."
+        ),
+    )
+    run.set_defaults(func=_cmd_run)
+
+    recover = subparsers.add_parser(
+        "recover-stuck",
+        help="Operator recovery: clear a stuck dispatch claim (REVA-27715 round 6).",
+        description=(
+            "Clear a dispatch claim whose `dispatchStartedAt` is set and "
+            "which would otherwise never be reclaimed automatically. "
+            "Requires --operator-note (non-empty) recording out-of-band "
+            "confirmation that remote state has been checked."
+        ),
+    )
+    recover.add_argument(
+        "--intent-id",
+        required=True,
+        help="The `id` of the outbox intent whose stuck dispatch is to be cleared.",
+    )
+    recover.add_argument(
+        "--workspace-id",
+        required=True,
+        help="The `workspaceId` of the same intent (the Mongo scope guard).",
+    )
+    recover.add_argument(
+        "--expected-owner",
+        required=True,
+        help=(
+            "The exact `claimOwner` value currently holding the claim. "
+            "The Mongo update is scoped to this owner; a wrong value is a "
+            "safe no-op rather than a wrong-target release."
+        ),
+    )
+    recover.add_argument(
+        "--operator-note",
+        required=True,
+        help=(
+            "Non-empty operator note recording out-of-band confirmation "
+            "that real remote state has been checked (typically: Paperclip "
+            "search for the intent's idempotency marker). Required: a "
+            "stuck claim can never be cleared silently."
+        ),
+    )
+    recover.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Discover the intent without modifying Mongo. Returns 0 if a stuck intent was found, 2 if not.",
+    )
+    recover.set_defaults(func=_cmd_recover_stuck)
+    return parser
+
+
+def main(argv: Optional[List[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    parser = _build_parser()
+    # Default to `run` when no subcommand is given so that
+    # `python3 consumer.py` keeps behaving like the original one-shot
+    # entrypoint (backward compatibility for any existing cron / Paperclip
+    # routine that invokes the script without a subcommand).
+    args = parser.parse_args(argv if argv is not None else sys.argv[1:])
+    if args.command is None:
+        args = parser.parse_args(["run"])
+
     try:
         config = ConsumerConfig.from_env()
     except RuntimeError as exc:
         logger.error(str(exc))
         return 2
 
-    stats = run_once(config, run_id=os.environ.get("PAPERCLIP_RUN_ID"))
-    logger.info("consumer cycle complete: %s", json.dumps(stats))
-    return 0
+    return args.func(args, config)
 
 
 if __name__ == "__main__":

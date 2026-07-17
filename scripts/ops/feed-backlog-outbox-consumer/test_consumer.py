@@ -465,8 +465,10 @@ class FakeIntentCollection:
         self.doc: Dict[str, Any] = dict(doc)
         self._extra_find_one_result = extra_find_one_result
 
-    def find_one(self, _filt):
-        return self._extra_find_one_result
+    def find_one(self, filt, **_kwargs):
+        if self._extra_find_one_result is not None:
+            return self._extra_find_one_result
+        return dict(self.doc) if self._matches(filt) else None
 
     def _matches(self, filt: Dict[str, Any]) -> bool:
         for key, cond in filt.items():
@@ -505,6 +507,16 @@ class FakeIntentCollection:
         if matched:
             self._apply(update)
         return MagicMock(matched_count=1 if matched else 0)
+
+
+class ConsumerConfigTests(unittest.TestCase):
+    def test_operator_note_strips_uri_userinfo_before_persistence(self):
+        note = "verified via https://operator:credential@control.example/api/issues?q=marker"
+        sanitized = consumer.sanitize_operator_note(note)
+        self.assertNotIn("operator", sanitized)
+        self.assertNotIn("credential", sanitized)
+        self.assertIn("https://", sanitized)
+        self.assertIn("?q=marker", sanitized)
 
 
 class StaleWorkerClaimScopingTests(unittest.TestCase):
@@ -650,6 +662,7 @@ class ExpiredLeaseDuringDispatchRegressionTests(unittest.TestCase):
             "workspace-1",
             "worker-a",
             "confirmed via marker search: no issue exists for this idempotency key yet",
+            {"idempotencyKey": "create:fp-1:0", "issueCount": 0, "issueIds": [], "verifiedAt": "now"},
         )
         self.assertTrue(released)
         self.assertNotIn("claimOwner", collection.doc)
@@ -667,7 +680,8 @@ class ExpiredLeaseDuringDispatchRegressionTests(unittest.TestCase):
         consumer.mark_dispatch_started(collection, "intent-1", "workspace-1", "worker-a")
 
         released = consumer.force_release_stuck_dispatch(
-            collection, "intent-1", "workspace-1", "worker-wrong", "note"
+            collection, "intent-1", "workspace-1", "worker-wrong", "note",
+            {"idempotencyKey": "create:fp-1:0", "issueCount": 0, "issueIds": [], "verifiedAt": "now"},
         )
         self.assertFalse(released)
         self.assertEqual(collection.doc["claimOwner"], "worker-a")
@@ -877,6 +891,7 @@ class NoSecondCreateRegressionTests(unittest.TestCase):
             "workspace-1",
             "worker-a",
             "confirmed via marker search: issue-1/issue-2 both already exist for this key",
+            {"idempotencyKey": "create:fp-recon:0", "issueCount": 2, "issueIds": ["issue-1", "issue-2"], "verifiedAt": "now"},
         )
         self.assertTrue(released)
 
@@ -962,6 +977,227 @@ class ReplayReconciliationTests(unittest.TestCase):
         client.create_issue.assert_not_called()
         client.patch_issue.assert_called_once()
         self.assertEqual(client.patch_issue.call_args[0][0], "issue-2")
+
+
+# --------------------------------------------------------------------------- #
+# CLI wiring tests (REVA-27985). Exercise argparse subcommands, the required
+# --operator-note guard, the Mongo no-op path, and the dry-run path. All
+# Mongo / Paperclip I/O is mocked -- these tests do not touch the real
+# control plane or any real Mongo collection.
+# --------------------------------------------------------------------------- #
+
+
+class CliWiringTests(unittest.TestCase):
+    """Verify the argparse surface of `consumer.py` and the subcommand
+    handlers added for REVA-27985: each subcommand exposes --help,
+    `recover-stuck` enforces the required `--operator-note`, and the
+    Mongo write is correctly scoped to `--expected-owner`."""
+
+    def _main(self, argv):
+        """Call consumer.main(argv) with a stubbed ConsumerConfig.from_env
+        so the test does not require real env vars to be set."""
+        with patch.object(consumer.ConsumerConfig, "from_env", return_value=make_config()):
+            return consumer.main(argv)
+
+    def test_top_level_help_exits_zero(self):
+        with self.assertRaises(SystemExit) as cm:
+            self._main(["--help"])
+        self.assertEqual(cm.exception.code, 0)
+
+    def test_run_subcommand_help_exits_zero(self):
+        with self.assertRaises(SystemExit) as cm:
+            self._main(["run", "--help"])
+        self.assertEqual(cm.exception.code, 0)
+
+    def test_recover_stuck_subcommand_help_exits_zero(self):
+        with self.assertRaises(SystemExit) as cm:
+            self._main(["recover-stuck", "--help"])
+        self.assertEqual(cm.exception.code, 0)
+
+    def test_recover_stuck_missing_required_flag_exits_two(self):
+        # argparse returns 2 for usage errors; this happens before our
+        # code runs because `--workspace-id`, `--expected-owner`, and
+        # `--operator-note` are all `required=True` on the subparser.
+        with self.assertRaises(SystemExit) as cm:
+            self._main(["recover-stuck", "--intent-id", "i-1"])
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_recover_stuck_empty_operator_note_after_strip_exits_three(self):
+        # argparse requires the flag to be present; a whitespace-only
+        # value passes argparse but must be rejected by our strip check.
+        with patch.object(consumer, "force_release_stuck_dispatch") as mock_release:
+            mock_release.return_value = True
+            rc = self._main(
+                [
+                    "recover-stuck",
+                    "--intent-id", "i-1",
+                    "--workspace-id", "w-1",
+                    "--expected-owner", "owner-1",
+                    "--operator-note", "   ",  # whitespace only
+                ]
+            )
+            self.assertEqual(rc, 3)
+            mock_release.assert_not_called()
+
+    def test_recover_stuck_no_mongo_match_returns_two(self):
+        fake_collection = MagicMock()
+        fake_collection.find_one.return_value = None
+        with patch.object(consumer, "get_collection", return_value=fake_collection):
+            with patch.object(consumer, "force_release_stuck_dispatch", return_value=False) as mock_release:
+                rc = self._main(
+                    [
+                        "recover-stuck",
+                        "--intent-id", "i-missing",
+                        "--workspace-id", "w-1",
+                        "--expected-owner", "owner-1",
+                        "--operator-note", "checked Paperclip search, no issue exists for this idempotency key",
+                    ]
+                )
+        self.assertEqual(rc, 2)
+        mock_release.assert_not_called()
+
+    def test_recover_stuck_match_returns_zero(self):
+        fake_collection = MagicMock()
+        fake_collection.find_one.return_value = {
+            "id": "i-stuck",
+            "workspaceId": "w-1",
+            "claimOwner": "owner-A",
+            "dispatchStartedAt": "2026-07-16T00:00:00+00:00",
+            "idempotencyKey": "create:fp-recovery:0",
+        }
+        verified = {"idempotencyKey": "create:fp-recovery:0", "issueCount": 0, "issueIds": [], "verifiedAt": "now"}
+        with patch.object(consumer, "get_collection", return_value=fake_collection):
+            with patch.object(consumer, "verify_remote_marker_state", return_value=verified) as mock_verify:
+                with patch.object(consumer, "force_release_stuck_dispatch", return_value=True) as mock_release:
+                    rc = self._main(
+                        [
+                            "recover-stuck",
+                            "--intent-id", "i-stuck",
+                            "--workspace-id", "w-1",
+                            "--expected-owner", "owner-A",
+                            "--operator-note", "verified remote marker state",
+                        ]
+                    )
+        self.assertEqual(rc, 0)
+        mock_verify.assert_called_once()
+        self.assertEqual(mock_release.call_args.kwargs["verified_marker_state"], verified)
+
+    def test_recover_stuck_dry_run_does_not_modify_mongo(self):
+        # --dry-run must NOT call force_release_stuck_dispatch (which is
+        # the write path); it must only discover the intent via the
+        # scoped find_one. We assert that by mocking the destructive
+        # helper -- the destructive helper must remain uncalled.
+        config = make_config()
+        fake_collection = MagicMock()
+        fake_collection.find_one.return_value = {
+            "id": "i-stuck",
+            "workspaceId": "w-1",
+            "intentKind": "create",
+            "claimOwner": "owner-A",
+            "dispatchStartedAt": "2026-07-16T00:00:00+00:00",
+            "claimedAt": "2026-07-16T00:00:00+00:00",
+            "deliveryState": "pending",
+        }
+        with patch.object(consumer.ConsumerConfig, "from_env", return_value=config):
+            with patch.object(consumer, "get_collection", return_value=fake_collection) as mock_get:
+                with patch.object(consumer, "force_release_stuck_dispatch") as mock_release:
+                    rc = consumer.main(
+                        [
+                            "recover-stuck",
+                            "--intent-id", "i-stuck",
+                            "--workspace-id", "w-1",
+                            "--expected-owner", "owner-A",
+                            "--operator-note", "dry-run inspection only",
+                            "--dry-run",
+                        ]
+                    )
+                    self.assertEqual(rc, 0)
+                    mock_get.assert_called_once_with(config)
+                    mock_release.assert_not_called()
+                    fake_collection.find_one.assert_called_once()
+                    # The find filter must include the same scope guard the
+                    # destructive path uses.
+                    call_args = fake_collection.find_one.call_args
+                    filter_doc = call_args.args[0] if call_args.args else call_args.kwargs.get("filter")
+                    self.assertIsNotNone(filter_doc)
+                    self.assertEqual(filter_doc["id"], "i-stuck")
+                    self.assertEqual(filter_doc["workspaceId"], "w-1")
+                    self.assertEqual(filter_doc["claimOwner"], "owner-A")
+                    self.assertIn("dispatchStartedAt", filter_doc)
+
+    def test_recover_stuck_dry_run_no_match_returns_two(self):
+        # Dry-run with no matching intent: return 2 (no_match), do not
+        # touch force_release_stuck_dispatch.
+        fake_collection = MagicMock()
+        fake_collection.find_one.return_value = None
+        with patch.object(consumer.ConsumerConfig, "from_env", return_value=make_config()):
+            with patch.object(consumer, "get_collection", return_value=fake_collection):
+                with patch.object(consumer, "force_release_stuck_dispatch") as mock_release:
+                    rc = consumer.main(
+                        [
+                            "recover-stuck",
+                            "--intent-id", "i-ghost",
+                            "--workspace-id", "w-1",
+                            "--expected-owner", "owner-A",
+                            "--operator-note", "dry-run, no intent matches",
+                            "--dry-run",
+                        ]
+                    )
+                    self.assertEqual(rc, 2)
+                    mock_release.assert_not_called()
+
+    def test_default_subcommand_is_run(self):
+        # `consumer.py` with no subcommand must behave like `consumer.py run`.
+        # We assert by intercepting run_once and confirming it is invoked
+        # when no subcommand is passed (the subcommand dispatcher would
+        # otherwise try to read real Mongo via get_collection).
+        with patch.object(consumer.ConsumerConfig, "from_env", return_value=make_config()):
+            with patch.object(consumer, "run_once", return_value={"pending_seen": 0}) as mock_run_once:
+                with patch.object(consumer, "force_release_stuck_dispatch") as mock_release:
+                    rc = consumer.main([])
+                    self.assertEqual(rc, 0)
+                    mock_run_once.assert_called_once()
+                    mock_release.assert_not_called()
+
+    def test_parser_lists_both_subcommands(self):
+        parser = consumer._build_parser()
+        # argparse stores subparsers; check that both names appear in help.
+        help_text = parser.format_help()
+        self.assertIn("run", help_text)
+        self.assertIn("recover-stuck", help_text)
+
+
+class IdempotentReplayIntegrationTests(unittest.TestCase):
+    """End-to-end test of the replay safety net the issue's acceptance
+    criteria name ("replay with no second issue"). Drives the same
+    intent through `process_intent` twice: the first run creates a real
+    external issue and acknowledges it locally; the second run sees the
+    intent as no-longer-pending (claim_intent returns None) and is
+    short-circuited without calling create_issue. Across both runs,
+    exactly ONE create_issue call ever fires."""
+
+    def test_replay_after_first_run_acknowledged_does_not_create_second_issue(self):
+        config = make_config()
+        intent = make_create_intent(
+            idempotency_key="create:replay-27985:0",
+            title="Replay no-dup test",
+            body="Body for replay no-dup test",
+            priority="low",
+        )
+        collection = FakeIntentCollection(dict(intent))
+        store = FakeIssueStore()
+        client = make_store_backed_client(store)
+
+        outcome_1 = consumer.process_intent(client, config, collection, intent, owner="worker-A")
+        self.assertEqual(outcome_1, "acknowledged")
+        self.assertEqual(collection.doc["deliveryState"], consumer.DELIVERY_STATE_ACKNOWLEDGED)
+        self.assertEqual(collection.doc["externalIssueId"], "issue-1")
+        self.assertEqual(len(store.issues), 1)
+
+        outcome_2 = consumer.process_intent(client, config, collection, intent, owner="worker-B")
+        self.assertEqual(outcome_2, "skipped_claimed")
+        self.assertEqual(len(store.issues), 1)
+        self.assertEqual(store._counter, 1)
 
 
 if __name__ == "__main__":
