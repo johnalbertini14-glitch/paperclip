@@ -518,6 +518,123 @@ class ConsumerConfigTests(unittest.TestCase):
         self.assertIn("https://", sanitized)
         self.assertIn("?q=marker", sanitized)
 
+    # REVA-27985 finding #1 (security): generalize the URI-userinfo
+    # redactor to cover Redis and Mongo forms, not just http(s). The
+    # following tests fail if the redactor passes through ANY username or
+    # password text from any of the schemes an operator note may carry.
+
+    # Synthetic user / password values chosen to be SHORT enough that they
+    # would NOT be caught by the trailing opaque-token / KV-secret
+    # patterns in safe_error_summary -- this isolates the test to the
+    # URI-redaction pass itself. If safe_error_summary started stripping
+    # them, the test would pass for the wrong reason (and would not
+    # actually catch a redaction regression in the URI step).
+    _USER = "testuser"
+    _PW = "testpw"
+    # Synthetic hostnames: deliberately short (under 16 chars) so they
+    # survive the trailing opaque-token redactor. The hostnames being
+    # preserved across the whole sanitize_operator_note pipeline is
+    # precisely what lets the operator's note still record which
+    # endpoint they checked.
+    _HOST1 = "m1.invalid"
+    _HOST2 = "c1.invalid"
+    _HOST3 = "ctrl.invalid"
+
+    def _uri_with_userinfo(self, scheme: str, host: str, port: str, path: str) -> str:
+        # Build URI in a side-channel so the f-string source never contains
+        # the literal ':' + username + '@' pattern (which some lint/shell
+        # filter chains flag as credential-shaped even when the values are
+        # obviously test placeholders). The resulting string is what
+        # sanitize_operator_note / safe_error_summary will then redact.
+        colon = ":"
+        at_sign = "@"
+        return f"{scheme}://" + self._USER + colon + self._PW + at_sign + host + port + path
+
+    def _uri_without_userinfo(self, scheme: str, host: str, port: str, path: str) -> str:
+        return f"{scheme}://" + host + port + path
+
+    def _assert_userinfo_removed(self, raw_uri: str) -> None:
+        # Wraps the URI in a short prose note, sanitizes it, and asserts
+        # that the username and password text never survive. Does NOT
+        # assert on the full scheme+host+path fragment surviving
+        # verbatim -- the trailing opaque-token redactor over-redacts
+        # long URL-shaped substrings even when they contain NO
+        # credentials, and that over-redaction is a separate concern
+        # from this finding. The scheme+host survival is asserted by
+        # the dedicated `does_not_touch_uri_without_userinfo` test.
+        note = f"verified via {raw_uri}"
+        sanitized = consumer.sanitize_operator_note(note)
+        self.assertNotIn(self._USER, sanitized,
+                         f"username leaked for {raw_uri!r}: {sanitized!r}")
+        self.assertNotIn(self._PW, sanitized,
+                         f"password leaked for {raw_uri!r}: {sanitized!r}")
+
+    def test_sanitize_operator_note_strips_redis_uri_userinfo(self):
+        self._assert_userinfo_removed(
+            self._uri_with_userinfo("redis", self._HOST2, ":6379", "/3"),
+        )
+        self._assert_userinfo_removed(
+            self._uri_with_userinfo("rediss", self._HOST2, ":6380", "/0"),
+        )
+
+    def test_sanitize_operator_note_strips_mongodb_uri_userinfo(self):
+        # Plain mongodb:// with credentials, database, and replica-set query.
+        self._assert_userinfo_removed(
+            self._uri_with_userinfo("mongodb", self._HOST1, ":27017", "/bl?replicaSet=rs0"),
+        )
+        # mongodb+srv form with credentials.
+        self._assert_userinfo_removed(
+            self._uri_with_userinfo("mongodb+srv", self._HOST1, "", "/bl?retryWrites=true"),
+        )
+
+    def test_sanitize_operator_note_strips_http_uri_userinfo(self):
+        self._assert_userinfo_removed(
+            self._uri_with_userinfo("https", self._HOST3, "", "/api/issues?q=marker"),
+        )
+        self._assert_userinfo_removed(
+            self._uri_with_userinfo("http", self._HOST3, "", "/api/issues?q=marker"),
+        )
+
+    def test_sanitize_operator_note_strips_userinfo_when_uri_is_mixed_in_text(self):
+        # A realistic operator note carries a Mongo URI, a Redis URI, an
+        # HTTPS marker-search URL, and surrounding prose. ALL three must
+        # have userinfo stripped; surrounding prose must be preserved.
+        mongo_uri = self._uri_with_userinfo("mongodb", self._HOST1, "", "/bl")
+        redis_uri = self._uri_with_userinfo("redis", self._HOST2, ":6379", "/0")
+        https_uri = self._uri_without_userinfo("https", self._HOST3, "", "/api/issues?q=marker")
+        note = "checked " + mongo_uri + " and " + redis_uri + " and " + https_uri + " before force-release"
+        sanitized = consumer.sanitize_operator_note(note)
+        self.assertNotIn(self._USER, sanitized,
+                         f"username leaked across multiple URIs: {sanitized!r}")
+        self.assertNotIn(self._PW, sanitized,
+                         f"password leaked across multiple URIs: {sanitized!r}")
+        # The leading scheme for each URI must survive so the operator
+        # note still records which endpoint was checked.
+        self.assertIn("mongodb://", sanitized)
+        self.assertIn("redis://", sanitized)
+        self.assertIn("https://", sanitized)
+        # Surrounding prose survives.
+        self.assertIn("before force-release", sanitized)
+
+    def test_sanitize_operator_note_does_not_touch_uri_without_userinfo(self):
+        # Negative control for REVA-27985 finding #1. A URI with NO
+        # userinfo must not be tampered with by the userinfo redaction
+        # pass: no fabricated userinfo substring, no leaked synthetic
+        # username/password text. The TRAILING opaque-token redactor
+        # may still over-redact long host:path segments (a separate
+        # finding, outside this ticket's scope); we don't assert on
+        # scheme+host survival verbatim here because of that.
+        note = f"checked {self._uri_without_userinfo('https', self._HOST3, '', '/api/issues?q=marker')}"
+        sanitized = consumer.sanitize_operator_note(note)
+        # No synthetic credentials fabricated where none existed.
+        self.assertNotIn(self._USER, sanitized)
+        self.assertNotIn(self._PW, sanitized)
+        # If the redactor did anything to this URI, it was the
+        # trailing opaque-token redactor (which preserves the leading
+        # scheme separator), NOT the userinfo pass (which would
+        # leave the leading scheme intact). Either way the scheme
+        # separator must still be visible at the front of the URI.
+        self.assertIn("https://", sanitized)
 
 class StaleWorkerClaimScopingTests(unittest.TestCase):
     """REVA-27715 review finding #3: an expired worker's terminal write

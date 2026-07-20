@@ -113,8 +113,18 @@ _DIGIT_RUN_PATTERN = re.compile(r"\b\d{12,}\b")
 
 
 def safe_error_summary(error: Any) -> str:
-    """Redact credential/PII-shaped substrings, then bound to 512 chars."""
+    """Redact credential/PII-shaped substrings, then bound to 512 chars.
+
+    First strips URI userinfo from any HTTP / Redis / Mongo form that may
+    appear in the text (e.g. a `ServerSelectionTimeoutError` whose message
+    includes `mongodb://user:pass@atlas/...`), then applies the opaque-
+    token / KV-secret / email / cookie / auth-scheme redactors. Without
+    the URI step, a short username/password in a non-HTTP scheme URI
+    (length below the opaque-token threshold) would survive this function
+    and be persisted to `gtm_backlog_outbox.lastError`.
+    """
     text = str(error or "")
+    text = _URI_WITH_USERINFO_PATTERN.sub(_strip_uri_userinfo_from_match, text)
     text = _COOKIE_PATTERN.sub("<cookie>", text)
     text = _AUTH_SCHEME_PATTERN.sub("<auth>", text)
     text = _AUTH_BARE_PATTERN.sub("<auth>", text)
@@ -126,18 +136,50 @@ def safe_error_summary(error: Any) -> str:
     return text[:MAX_LAST_ERROR_CHARS]
 
 
-def sanitize_operator_note(note: str) -> str:
-    """Persist a bounded note without URI userinfo or credential-shaped text."""
-    def redact_uri(match: re.Match[str]) -> str:
-        parsed = urlsplit(match.group(0))
-        if parsed.username is None and parsed.password is None:
-            return match.group(0)
-        host = parsed.hostname or ""
-        if parsed.port is not None:
-            host = f"{host}:{parsed.port}"
-        return urlunsplit((parsed.scheme, host, parsed.path, parsed.query, parsed.fragment))
+# Schemes whose URIs may carry userinfo (username[:password]@host) and must
+# be redacted before persistence. This covers the full surface mentioned in
+# the REVA-27985 review: HTTPS / MongoDB (plain + SRV) / Redis (plain + TLS).
+# REVA-27985 finding #1 (security): the previous regex only matched `http(s)://`
+# and therefore leaked Redis and MongoDB userinfo into `forceReleaseLog.note`
+# whenever the operator note referenced such a URI. The pattern now matches
+# every one of those schemes in a single pass.
+_URI_SCHEMES_WITH_USERINFO = "(?:https?|rediss?|mongodb(?:\\+srv)?)"
+_URI_WITH_USERINFO_PATTERN = re.compile(
+    rf"{_URI_SCHEMES_WITH_USERINFO}://[^\s]+",
+    re.IGNORECASE,
+)
 
-    without_userinfo = re.sub(r"https?://[^\s]+", redact_uri, note)
+
+def _strip_uri_userinfo(uri: str) -> str:
+    """Return `uri` with any `user[:password]@` component removed.
+
+    Returns `uri` unchanged when it has no credentials.
+    """
+    parsed = urlsplit(uri)
+    if parsed.username is None and parsed.password is None:
+        return uri
+    host = parsed.hostname or ""
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    return urlunsplit((parsed.scheme, host, parsed.path, parsed.query, parsed.fragment))
+
+
+def _strip_uri_userinfo_from_match(match: re.Match[str]) -> str:
+    """`re.sub` replacement adapter that strips userinfo from the matched URI."""
+    return _strip_uri_userinfo(match.group(0))
+
+
+def sanitize_operator_note(note: str) -> str:
+    """Persist a bounded note without URI userinfo or credential-shaped text.
+
+    Strips the `user[:password]@` component from every supported URI scheme
+    (http, https, redis, rediss, mongodb, mongodb+srv) before applying the
+    general PII / credential redactor. The username / password must NEVER
+    survive this function, regardless of which scheme the URI uses — the
+    safe summary then catches any other credential-shaped substring (KV
+    secrets, JWTs, opaque tokens) that might still be in the note.
+    """
+    without_userinfo = _URI_WITH_USERINFO_PATTERN.sub(_strip_uri_userinfo_from_match, note)
     return safe_error_summary(without_userinfo)
 
 
@@ -1101,5 +1143,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     return args.func(args, config)
 
 
+# Guard: prevents argparse from executing at import time during test discovery.
+# Without this, `python3 -m unittest discover` runs consumer.py as __main__
+# and exits with status 2 (usage error) before unittest can discover any tests,
+# because the `run` subcommand is not given and `--help` exits 0 but the
+# default-args path still tries to ConsumerConfig.from_env() which exits.
 if __name__ == "__main__":
     sys.exit(main())
