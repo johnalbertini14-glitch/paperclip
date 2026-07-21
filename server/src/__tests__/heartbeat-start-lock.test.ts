@@ -7,7 +7,7 @@ describe("heartbeat agent start lock", () => {
     vi.useRealTimers();
   });
 
-  it("does not let a stale start lock freeze later queued-run starts", async () => {
+  it("fails closed when the previous start lock is stale", async () => {
     vi.useFakeTimers();
 
     const agentId = randomUUID();
@@ -22,8 +22,33 @@ describe("heartbeat agent start lock", () => {
     await Promise.resolve();
     expect(secondStart).not.toHaveBeenCalled();
 
+    const secondStartRejection = expect(secondStartResult).rejects.toThrow("Agent start lock timed out");
     await vi.advanceTimersByTimeAsync(30_000);
 
+    await secondStartRejection;
+    expect(secondStart).not.toHaveBeenCalled();
+
+    await expect(withAgentStartLock(agentId, secondStart)).rejects.toThrow("Agent start lock timed out");
+    expect(secondStart).not.toHaveBeenCalled();
+  });
+
+  it("serializes starts after the previous lock releases", async () => {
+    const agentId = randomUUID();
+    let releaseFirst!: () => void;
+    const firstStart = vi.fn(() => new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    }));
+    const secondStart = vi.fn(async () => "started");
+
+    const firstStartResult = withAgentStartLock(agentId, firstStart);
+    await Promise.resolve();
+    const secondStartResult = withAgentStartLock(agentId, secondStart);
+    await Promise.resolve();
+    expect(secondStart).not.toHaveBeenCalled();
+
+    releaseFirst();
+
+    await expect(firstStartResult).resolves.toBeUndefined();
     await expect(secondStartResult).resolves.toBe("started");
     expect(secondStart).toHaveBeenCalledTimes(1);
   });
