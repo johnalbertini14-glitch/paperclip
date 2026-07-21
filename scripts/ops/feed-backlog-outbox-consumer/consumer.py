@@ -247,14 +247,14 @@ class PaperclipClient:
         resp = self._session.get(
             f"{self._base}/api/companies/{self._company_id}/issues",
             params={"q": query},
-            timeout=20,
+            timeout=60,
         )
         resp.raise_for_status()
         data = resp.json()
         return data if isinstance(data, list) else data.get("items", [])
 
     def get_issue(self, issue_id: str) -> Dict[str, Any]:
-        resp = self._session.get(f"{self._base}/api/issues/{issue_id}", timeout=20)
+        resp = self._session.get(f"{self._base}/api/issues/{issue_id}", timeout=60)
         resp.raise_for_status()
         return resp.json()
 
@@ -262,24 +262,24 @@ class PaperclipClient:
         resp = self._session.post(
             f"{self._base}/api/companies/{self._company_id}/issues",
             json=body,
-            timeout=20,
+            timeout=60,
         )
         resp.raise_for_status()
         return resp.json()
 
     def patch_issue(self, issue_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        resp = self._session.patch(f"{self._base}/api/issues/{issue_id}", json=body, timeout=20)
+        resp = self._session.patch(f"{self._base}/api/issues/{issue_id}", json=body, timeout=60)
         resp.raise_for_status()
         return resp.json()
 
     def list_comments(self, issue_id: str) -> List[Dict[str, Any]]:
-        resp = self._session.get(f"{self._base}/api/issues/{issue_id}/comments", timeout=20)
+        resp = self._session.get(f"{self._base}/api/issues/{issue_id}/comments", timeout=60)
         resp.raise_for_status()
         data = resp.json()
         return data if isinstance(data, list) else data.get("items", [])
 
     def post_comment(self, issue_id: str, body: str) -> Dict[str, Any]:
-        resp = self._session.post(f"{self._base}/api/issues/{issue_id}/comments", json={"body": body}, timeout=20)
+        resp = self._session.post(f"{self._base}/api/issues/{issue_id}/comments", json={"body": body}, timeout=60)
         resp.raise_for_status()
         return resp.json()
 
@@ -565,7 +565,7 @@ def dispatch_escalation(
 # pending -> failed. Scoped by (id, workspaceId) on every write.
 # --------------------------------------------------------------------- #
 def get_collection(config: ConsumerConfig) -> Collection:
-    client: MongoClient = MongoClient(config.mongo_url, serverSelectionTimeoutMS=10000)
+    client: MongoClient = MongoClient(config.mongo_url, serverSelectionTimeoutMS=60000)
     collection = client[config.db_name][OUTBOX_COLLECTION_NAME]
     # Retain the owning client on the collection so CLI commands can close it
     # deterministically after a one-shot operation.
