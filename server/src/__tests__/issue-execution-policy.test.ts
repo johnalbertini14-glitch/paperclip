@@ -466,6 +466,168 @@ describe("issue execution policy transitions", () => {
     });
   });
 
+  describe("changes-requested return-owner reconciliation", () => {
+    const policy = reviewOnlyPolicy();
+    const reviewStageId = policy.stages[0].id;
+
+    function changesRequestedState(returnAssignee: IssueExecutionState["returnAssignee"]): IssueExecutionState {
+      return {
+        status: "changes_requested",
+        currentStageId: reviewStageId,
+        currentStageIndex: 0,
+        currentStageType: "review",
+        currentParticipant: { type: "agent", agentId: qaAgentId },
+        returnAssignee,
+        reviewRequest: null,
+        completedStageIds: [],
+        lastDecisionId: null,
+        lastDecisionOutcome: "changes_requested",
+        monitor: null,
+      };
+    }
+
+    it("replaces a stale user handback with the current authorized agent on resubmission", () => {
+      const resubmission = applyIssueExecutionPolicyTransition({
+        issue: {
+          status: "in_progress",
+          assigneeAgentId: coderAgentId,
+          assigneeUserId: null,
+          executionPolicy: policy,
+          executionState: changesRequestedState({ type: "user", userId: "local-board" }),
+        },
+        policy,
+        requestedStatus: "done",
+        requestedAssigneePatch: {},
+        actor: { agentId: coderAgentId },
+        commentBody: "Addressed the requested changes",
+      });
+
+      expect(resubmission.patch).toMatchObject({
+        status: "in_review",
+        assigneeAgentId: qaAgentId,
+        assigneeUserId: null,
+        executionState: {
+          status: "pending",
+          currentParticipant: { type: "agent", agentId: qaAgentId },
+          returnAssignee: { type: "agent", agentId: coderAgentId },
+        },
+      });
+
+      const requestedChanges = applyIssueExecutionPolicyTransition({
+        issue: {
+          status: "in_review",
+          assigneeAgentId: qaAgentId,
+          assigneeUserId: null,
+          executionPolicy: policy,
+          executionState: resubmission.patch.executionState,
+        },
+        policy,
+        requestedStatus: "in_progress",
+        requestedAssigneePatch: {},
+        actor: { agentId: qaAgentId },
+        commentBody: "One more fix is required",
+      });
+
+      expect(requestedChanges.patch).toMatchObject({
+        status: "in_progress",
+        assigneeAgentId: coderAgentId,
+        assigneeUserId: null,
+        executionState: {
+          status: "changes_requested",
+          returnAssignee: { type: "agent", agentId: coderAgentId },
+        },
+      });
+    });
+
+    it("uses a newly assigned agent instead of a stale prior agent snapshot", () => {
+      const replacementAgentId = "44444444-4444-4444-8444-444444444444";
+      const result = applyIssueExecutionPolicyTransition({
+        issue: {
+          status: "in_progress",
+          assigneeAgentId: replacementAgentId,
+          assigneeUserId: null,
+          executionPolicy: policy,
+          executionState: changesRequestedState({ type: "agent", agentId: coderAgentId }),
+        },
+        policy,
+        requestedStatus: "done",
+        requestedAssigneePatch: {},
+        actor: { agentId: replacementAgentId },
+        commentBody: "Replacement executor completed the revision",
+      });
+
+      expect(result.patch.executionState).toMatchObject({
+        status: "pending",
+        returnAssignee: { type: "agent", agentId: replacementAgentId },
+      });
+    });
+
+    it("preserves an intentional current human executor over a stale agent snapshot", () => {
+      const result = applyIssueExecutionPolicyTransition({
+        issue: {
+          status: "in_progress",
+          assigneeAgentId: null,
+          assigneeUserId: boardUserId,
+          executionPolicy: policy,
+          executionState: changesRequestedState({ type: "agent", agentId: coderAgentId }),
+        },
+        policy,
+        requestedStatus: "done",
+        requestedAssigneePatch: {},
+        actor: { userId: boardUserId },
+        commentBody: "Human executor completed the revision",
+      });
+
+      expect(result.patch.executionState).toMatchObject({
+        status: "pending",
+        returnAssignee: { type: "user", userId: boardUserId },
+      });
+    });
+
+    it("rejects a new review cycle when no current executor is assigned", () => {
+      expect(() =>
+        applyIssueExecutionPolicyTransition({
+          issue: {
+            status: "in_progress",
+            assigneeAgentId: null,
+            assigneeUserId: null,
+            executionPolicy: policy,
+            executionState: changesRequestedState({ type: "user", userId: "local-board" }),
+          },
+          policy,
+          requestedStatus: "done",
+          requestedAssigneePatch: {},
+          actor: { userId: boardUserId },
+          commentBody: "Attempted resubmission",
+        }),
+      ).toThrow("without a current executor");
+    });
+
+    it("keeps the return snapshot immutable while review is pending", () => {
+      const result = applyIssueExecutionPolicyTransition({
+        issue: {
+          status: "in_progress",
+          assigneeAgentId: coderAgentId,
+          assigneeUserId: null,
+          executionPolicy: policy,
+          executionState: {
+            ...changesRequestedState({ type: "user", userId: "local-board" }),
+            status: "pending",
+          },
+        },
+        policy,
+        requestedStatus: undefined,
+        requestedAssigneePatch: {},
+        actor: { agentId: coderAgentId },
+      });
+
+      expect(result.patch.executionState).toMatchObject({
+        status: "pending",
+        returnAssignee: { type: "user", userId: "local-board" },
+      });
+    });
+  });
+
   describe("review-only policy (no approval stage)", () => {
     const policy = reviewOnlyPolicy();
     const reviewStageId = policy.stages[0].id;

@@ -118,11 +118,12 @@ interface IssueExecutionDecision {
 1. **Reviewer requests changes** by transitioning to any status other than `done` (typically `in_progress`), with a comment explaining what needs to change.
 2. Runtime automatically:
    - Sets status to `in_progress`
-   - Reassigns to the original executor (stored in `returnAssignee`)
+   - Reassigns to the executor stored in `returnAssignee`
    - Sets `executionState.status` to `changes_requested`
-3. **Executor makes changes** and transitions to `done` again.
-4. Runtime routes back to the **same review stage** (not the beginning), with the same reviewer.
-5. This loop continues until the reviewer approves.
+3. **Executor makes changes** and transitions to `done` again. When this starts a new review cycle, the currently assigned executor becomes the refreshed `returnAssignee`. This lets an authorized board reassignment replace a stale user or old-agent snapshot.
+4. Runtime routes back to the **same review stage** (not the beginning), with the same reviewer. While that review is pending, the refreshed return snapshot is immutable.
+5. A resubmission with no current agent or user executor is rejected instead of falling back to a stale snapshot.
+6. This loop continues until the reviewer approves.
 
 ### Policy Variants
 

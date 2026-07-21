@@ -404,6 +404,12 @@ An `in_review` issue is stalled when it has no typed participant, no pending int
 
 When an execution-policy review stage has a pending agent participant, the participant's run is part of the review path only while it is live or queued. If that participant run reaches a terminal state while `executionState.status` remains `pending`, no decision has been recorded. Paperclip should queue one bounded normal-model recovery wake for the same participant when the agent is invokable and no other review path exists. If that recovery run also finishes while the stage remains pending, or the participant cannot be invoked, Paperclip must move the source issue to an explicit blocked/recovery path instead of leaving `in_review` to drift silently.
 
+### Review-cycle return-owner reconciliation
+
+`executionState.returnAssignee` is immutable while a review or approval stage is pending. When a changes-requested issue starts a new review cycle, however, the issue's current authorized agent or user assignee is authoritative and refreshes the handback snapshot. This prevents an older agent or `local-board` snapshot from undoing a later authorized executor repair.
+
+Executor reassignment and resubmission should be separate authorized updates. The reassignment must set exactly one current owner, including clearing the other assignee field. A new review cycle with no current executor is rejected rather than silently preserving a stale return owner.
+
 ### Issue monitors
 
 An issue monitor is a one-shot deferred action path for agent-owned issues in `in_progress` or `in_review`.

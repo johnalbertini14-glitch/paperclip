@@ -816,7 +816,13 @@ function applyIssueExecutionStageTransition(input: TransitionInput): TransitionR
       : nextPendingStage(input.policy, existingState);
   if (!pendingStage) return { patch };
 
-  const returnAssignee = existingState?.returnAssignee ?? currentAssignee;
+  const returnAssignee =
+    existingState?.status === CHANGES_REQUESTED_STATUS
+      ? currentAssignee
+      : existingState?.returnAssignee ?? currentAssignee;
+  if (existingState?.status === CHANGES_REQUESTED_STATUS && !returnAssignee) {
+    throw unprocessable("Cannot start a new review cycle without a current executor");
+  }
   const skippedStageIds = [...(existingState?.completedStageIds ?? [])];
   let participant = selectStageParticipant(pendingStage, {
     preferred:
