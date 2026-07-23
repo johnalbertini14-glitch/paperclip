@@ -27,6 +27,11 @@ export interface WorkspaceOperationLogFinalizeSummary {
   compressed: boolean;
 }
 
+/**
+ * Discards a log handle that was created but will never be finalized.
+ * Used when an operation is rejected before the handle is valid,
+ * preventing orphaned log artifacts.
+ */
 export interface WorkspaceOperationLogStore {
   begin(input: { companyId: string; operationId: string }): Promise<WorkspaceOperationLogHandle>;
   append(
@@ -34,6 +39,7 @@ export interface WorkspaceOperationLogStore {
     event: { stream: "stdout" | "stderr" | "system"; chunk: string; ts: string },
   ): Promise<void>;
   finalize(handle: WorkspaceOperationLogHandle): Promise<WorkspaceOperationLogFinalizeSummary>;
+  discard(handle: WorkspaceOperationLogHandle): Promise<void>;
   read(handle: WorkspaceOperationLogHandle, opts?: WorkspaceOperationLogReadOptions): Promise<WorkspaceOperationLogReadResult>;
 }
 
@@ -131,6 +137,15 @@ function createLocalFileWorkspaceOperationLogStore(basePath: string): WorkspaceO
         sha256: hash,
         compressed: false,
       };
+    },
+
+    async discard(handle) {
+      if (handle.store !== "local_file") return;
+      const absPath = resolveWithin(basePath, handle.logRef);
+      await fs.unlink(absPath).catch(() => {
+        // Best-effort: if the file is already gone (e.g. concurrent race),
+        // that is fine — we only need to ensure no orphaned artifact remains.
+      });
     },
 
     async read(handle, opts) {

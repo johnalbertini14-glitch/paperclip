@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
-import { workspaceOperations } from "@paperclipai/db";
+import { issues, workspaceOperations } from "@paperclipai/db";
 import type { WorkspaceOperation, WorkspaceOperationPhase, WorkspaceOperationStatus } from "@paperclipai/shared";
-import { asc, desc, eq, inArray, isNull, or, and } from "drizzle-orm";
-import { notFound } from "../errors.js";
+import { asc, desc, eq, inArray, isNull, or, and, sql } from "drizzle-orm";
+import { invalidIssueReference, notFound } from "../errors.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
 import { instanceSettingsService } from "./instance-settings.js";
 import { getWorkspaceOperationLogStore } from "./workspace-operation-log-store.js";
@@ -95,6 +95,9 @@ export function workspaceOperationService(db: Db) {
       let executionWorkspaceId = input.executionWorkspaceId ?? null;
       const createdIds: string[] = [];
 
+      // Normalize: explicit null is always permitted; omitted/undefined maps to null.
+      const issueId = input.issueId ?? null;
+
       return {
         async attachExecutionWorkspaceId(nextExecutionWorkspaceId) {
           executionWorkspaceId = nextExecutionWorkspaceId ?? null;
@@ -114,13 +117,10 @@ export function workspaceOperationService(db: Db) {
           };
           const startedAt = new Date();
           const id = randomUUID();
-          const handle = await logStore.begin({
-            companyId: input.companyId,
-            operationId: id,
-          });
 
           let stdoutExcerpt = "";
           let stderrExcerpt = "";
+
           const append = async (stream: "stdout" | "stderr" | "system", chunk: string | null | undefined) => {
             if (!chunk) return;
             const sanitizedChunk = redactCurrentUserText(chunk, currentUserRedactionOptions);
@@ -133,24 +133,87 @@ export function workspaceOperationService(db: Db) {
             });
           };
 
-          await db.insert(workspaceOperations).values({
-            id,
+          // Create the log handle BEFORE the transaction so it can be discarded
+          // if the issue reference guard rejects the operation.
+          const handle = await logStore.begin({
             companyId: input.companyId,
-            executionWorkspaceId,
-            heartbeatRunId: input.heartbeatRunId ?? null,
-            issueId: input.issueId ?? null,
-            phase: recordInput.phase,
-            command: recordInput.command ?? null,
-            cwd: recordInput.cwd ?? null,
-            status: "running",
-            logStore: handle.store,
-            logRef: handle.logRef,
-            metadata: redactCurrentUserValue(
-              recordInput.metadata ?? null,
-              currentUserRedactionOptions,
-            ) as Record<string, unknown> | null,
-            startedAt,
+            operationId: id,
           });
+
+          try {
+            // Race-safe, tenant-scoped issue reference guard.
+            //
+            // The transaction pairs a SELECT FOR UPDATE (which acquires a row-level
+            // lock, closing the delete-between-check-and-insert TOCTOU window) with
+            // the INSERT in a single atomic unit.  If the issue is deleted between
+            // our SELECT and INSERT, the FOR UPDATE lock ensures PostgreSQL rejects
+            // the concurrent DELETE until our transaction commits or rolls back.
+            //
+            // Explicit null issueId is always permitted (no-issue workspace ops).
+            if (issueId !== null) {
+              await db.transaction(async (tx) => {
+                // FOR UPDATE closes the TOCTOU race: the row lock is held until
+                // this transaction commits or rolls back, preventing a concurrent
+                // delete from committing before we insert.
+                await tx
+                  .execute(sql`SELECT 1 FROM ${issues}
+                               WHERE ${issues.id} = ${issueId}
+                                 AND ${issues.companyId} = ${input.companyId}
+                               FOR UPDATE`);
+
+                const [found] = await tx
+                  .select({ id: issues.id })
+                  .from(issues)
+                  .where(and(eq(issues.id, issueId), eq(issues.companyId, input.companyId)))
+                  .limit(1);
+
+                if (!found) throw invalidIssueReference();
+
+                await tx.insert(workspaceOperations).values({
+                  id,
+                  companyId: input.companyId,
+                  executionWorkspaceId,
+                  heartbeatRunId: input.heartbeatRunId ?? null,
+                  issueId,
+                  phase: recordInput.phase,
+                  command: recordInput.command ?? null,
+                  cwd: recordInput.cwd ?? null,
+                  status: "running",
+                  logStore: handle.store,
+                  logRef: handle.logRef,
+                  metadata: redactCurrentUserValue(
+                    recordInput.metadata ?? null,
+                    currentUserRedactionOptions,
+                  ) as Record<string, unknown> | null,
+                  startedAt,
+                });
+              });
+            } else {
+              await db.insert(workspaceOperations).values({
+                id,
+                companyId: input.companyId,
+                executionWorkspaceId,
+                heartbeatRunId: input.heartbeatRunId ?? null,
+                issueId: null,
+                phase: recordInput.phase,
+                command: recordInput.command ?? null,
+                cwd: recordInput.cwd ?? null,
+                status: "running",
+                logStore: handle.store,
+                logRef: handle.logRef,
+                metadata: redactCurrentUserValue(
+                  recordInput.metadata ?? null,
+                  currentUserRedactionOptions,
+                ) as Record<string, unknown> | null,
+                startedAt,
+              });
+            }
+          } catch (error) {
+            // Discard the log handle created before the guard — do not leave an orphaned file.
+            await logStore.discard(handle).catch(() => null);
+            throw error;
+          }
+
           createdIds.push(id);
 
           try {
