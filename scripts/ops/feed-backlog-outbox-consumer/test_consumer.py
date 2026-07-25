@@ -1,3 +1,5 @@
+import contextlib
+import io
 import unittest
 from typing import Any, Dict
 from unittest.mock import MagicMock, patch
@@ -1262,6 +1264,56 @@ class CliWiringTests(unittest.TestCase):
                     )
                     self.assertEqual(rc, 2)
                     mock_release.assert_not_called()
+
+    def test_recover_stuck_dry_run_sanitizes_operator_note_in_stdout(self):
+        # REVA-27715 CTO adjudication (2026-07-25): `recover-stuck --dry-run`
+        # echoed the raw `--operator-note` value as `operator_note_was`,
+        # bypassing `sanitize_operator_note` used for the persisted release
+        # log at the write path. An operator note can legitimately reference
+        # a connection string while describing why a claim is stuck, so it
+        # must go through the same URI-userinfo/credential-shaped redaction
+        # before it ever reaches stdout.
+        config = make_config()
+        fake_collection = MagicMock()
+        fake_collection.find_one.return_value = {
+            "id": "i-stuck",
+            "workspaceId": "w-1",
+            "intentKind": "create",
+            "claimOwner": "owner-A",
+            "dispatchStartedAt": "2026-07-16T00:00:00+00:00",
+            "claimedAt": "2026-07-16T00:00:00+00:00",
+            "deliveryState": "pending",
+        }
+        raw_note = (
+            "stuck while worker read mongodb://dbadmin:s3cr3tPassw0rd@atlas.example.invalid/prod, "
+            "retry with token=abcd1234efgh5678ijkl9012mnop"
+        )
+        with patch.object(consumer.ConsumerConfig, "from_env", return_value=config):
+            with patch.object(consumer, "get_collection", return_value=fake_collection):
+                with patch.object(consumer, "force_release_stuck_dispatch") as mock_release:
+                    captured = io.StringIO()
+                    with contextlib.redirect_stdout(captured):
+                        rc = consumer.main(
+                            [
+                                "recover-stuck",
+                                "--intent-id", "i-stuck",
+                                "--workspace-id", "w-1",
+                                "--expected-owner", "owner-A",
+                                "--operator-note", raw_note,
+                                "--dry-run",
+                            ]
+                        )
+                    self.assertEqual(rc, 0)
+                    mock_release.assert_not_called()
+        printed = captured.getvalue()
+        self.assertNotIn("dbadmin", printed)
+        self.assertNotIn("s3cr3tPassw0rd", printed)
+        self.assertNotIn("abcd1234efgh5678ijkl9012mnop", printed)
+        self.assertIn("operator_note_was", printed)
+        self.assertEqual(
+            consumer.json.loads(printed)["operator_note_was"],
+            consumer.sanitize_operator_note(raw_note),
+        )
 
     def test_default_subcommand_is_run(self):
         # `consumer.py` with no subcommand must behave like `consumer.py run`.

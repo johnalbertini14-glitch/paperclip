@@ -985,7 +985,7 @@ def _cmd_recover_stuck(args: argparse.Namespace, config: ConsumerConfig) -> int:
                     "dispatch_started_at": existing.get("dispatchStartedAt"),
                     "claimed_at": existing.get("claimedAt"),
                     "delivery_state": existing.get("deliveryState"),
-                    "operator_note_was": operator_note,
+                    "operator_note_was": sanitize_operator_note(operator_note),
                 },
                 default=str,
             )
