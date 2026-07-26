@@ -8341,6 +8341,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       companyId: agent.companyId,
       heartbeatRunId: run.id,
       executionWorkspaceId: existingExecutionWorkspace?.id ?? null,
+      issueId,
     });
     const executionWorkspaceBase = {
       baseCwd: resolvedWorkspace.cwd,

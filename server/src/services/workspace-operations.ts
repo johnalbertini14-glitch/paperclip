@@ -162,10 +162,23 @@ export function workspaceOperationService(db: Db) {
                 throw invalidIssueReference();
               }
 
+              // Race-safe, tenant-scoped issue reference guard.
+              //
+              // The transaction pairs a SELECT FOR UPDATE (which acquires a row-level
+              // lock, closing the delete-between-check-and-insert TOCTOU window) with
+              // the INSERT in a single atomic unit.  If the issue is deleted between
+              // our SELECT and INSERT, the FOR UPDATE lock ensures PostgreSQL rejects
+              // the concurrent DELETE until our transaction commits or rolls back.
+              //
+              // Explicit null issueId is always permitted (no-issue workspace ops).
               await db.transaction(async (tx) => {
-                // FOR UPDATE closes the TOCTOU race: the row lock is held until
-                // this transaction commits or rolls back, preventing a concurrent
-                // delete from committing before we insert.
+                // Acquire row lock — fire-and-forget; lock held until commit/rollback.
+                await tx.execute(sql`SELECT ${issues.id} FROM ${issues}
+                    WHERE ${and(eq(issues.id, issueId), eq(issues.companyId, input.companyId))}
+                    LIMIT 1
+                    FOR UPDATE`);
+
+                // Re-check existence inside the lock; throw before INSERT on any miss.
                 const [found] = await tx
                   .select({ id: issues.id })
                   .from(issues)
