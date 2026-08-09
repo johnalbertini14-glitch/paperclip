@@ -904,6 +904,13 @@
       "when": 1786276800000,
       "tag": "0128_heartbeat_runs_context_issue_index",
       "breakpoints": true
+    },
+    {
+      "idx": 129,
+      "version": "7",
+      "when": 1786363200000,
+      "tag": "0129_activity_log_entity_run_issue_idx",
+      "breakpoints": true
     }
   ]
 }
