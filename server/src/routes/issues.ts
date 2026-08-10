@@ -7156,7 +7156,7 @@ export function issueRoutes(
     const limit =
       limitRaw && Number.isFinite(limitRaw) && limitRaw > 0
         ? Math.min(Math.floor(limitRaw), MAX_ISSUE_COMMENT_LIMIT)
-        : null;
+        : MAX_ISSUE_COMMENT_LIMIT; // cap omitted-limit callers at a safe bound
     const comments = await svc.listComments(id, {
       afterCommentId,
       order,
