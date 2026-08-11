@@ -19,6 +19,7 @@ export {
   clampIssueListLimit,
   ISSUE_LIST_DEFAULT_LIMIT,
   ISSUE_LIST_MAX_LIMIT,
+  MAX_ISSUE_COMMENT_PAGE_LIMIT,
   issueService,
   type IssueFilters,
 } from "./issues.js";

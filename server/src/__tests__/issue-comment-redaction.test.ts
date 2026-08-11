@@ -187,6 +187,26 @@ describeEmbeddedPostgres("deleted issue comment redaction", () => {
     expect(JSON.stringify(wakePayload)).not.toContain("secret metadata");
   });
 
+  it("bounds the default issue comments endpoint when the limit is omitted", async () => {
+    const { companyId, issueId } = await seedIssue();
+    const comments = Array.from({ length: 501 }, (_, index) => {
+      const createdAt = new Date(Date.UTC(2026, 5, 4, 0, index));
+      return {
+        id: randomUUID(),
+        companyId,
+        issueId,
+        body: `comment-${index}`,
+        createdAt,
+        updatedAt: createdAt,
+      };
+    });
+    await db.insert(issueComments).values(comments);
+    const response = await request(createApp(companyId)).get(`/api/issues/${issueId}/comments`);
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.body).toHaveLength(500);
+    expect(response.body[0]?.body).toBe("comment-500");
+    expect(response.body.at(-1)?.body).toBe("comment-1");
+  });
   it("excludes deleted comment bodies from company search", async () => {
     const { companyId, issueId } = await seedIssue();
     await db.insert(issueComments).values({

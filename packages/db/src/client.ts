@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { drizzle as drizzlePg } from "drizzle-orm/postgres-js";
-import { migrate as migratePg } from "drizzle-orm/postgres-js/migrator";
 import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
@@ -32,6 +31,20 @@ function splitMigrationStatements(content: string): string[] {
     .split("--> statement-breakpoint")
     .map((statement) => statement.trim())
     .filter((statement) => statement.length > 0);
+}
+
+function normalizeMigrationStatement(statement: string): string {
+  return statement
+    .replace(/--[^\r\n]*/g, "")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isConcurrentIndexStatement(statement: string): boolean {
+  return /^CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\b/i.test(
+    normalizeMigrationStatement(statement),
+  );
 }
 
 export type MigrationState =
@@ -259,11 +272,15 @@ async function applyPendingMigrationsManually(
       );
       if (existingEntry) continue;
 
-      await runInTransaction(sql, async () => {
-        for (const statement of splitMigrationStatements(migrationContent)) {
+      const statements = splitMigrationStatements(migrationContent);
+      if (statements.some(isConcurrentIndexStatement)) {
+        // PostgreSQL rejects CREATE INDEX CONCURRENTLY inside a transaction.
+        // Run the marked DDL in autocommit mode, then record its history in a
+        // separate statement. Migrations 0128/0129 each contain one such DDL
+        // statement; ordinary migrations retain the atomic path below.
+        for (const statement of statements) {
           await sql.unsafe(statement);
         }
-
         await recordMigrationHistoryEntry(
           sql,
           qualifiedTable,
@@ -272,7 +289,22 @@ async function applyPendingMigrationsManually(
           hash,
           folderMillisByFileName.get(migrationFile) ?? Date.now(),
         );
-      });
+      } else {
+        await runInTransaction(sql, async () => {
+          for (const statement of statements) {
+            await sql.unsafe(statement);
+          }
+
+          await recordMigrationHistoryEntry(
+            sql,
+            qualifiedTable,
+            columnNames,
+            migrationFile,
+            hash,
+            folderMillisByFileName.get(migrationFile) ?? Date.now(),
+          );
+        });
+      }
     }
   } finally {
     await sql.end();
@@ -377,7 +409,7 @@ async function migrationStatementAlreadyApplied(
   sql: ReturnType<typeof postgres>,
   statement: string,
 ): Promise<boolean> {
-  const normalized = statement.replace(/\s+/g, " ").trim();
+  const normalized = normalizeMigrationStatement(statement);
 
   const createTableMatch = normalized.match(/^CREATE TABLE(?: IF NOT EXISTS)? "([^"]+)"/i);
   if (createTableMatch) {
@@ -391,7 +423,9 @@ async function migrationStatementAlreadyApplied(
     return columnExists(sql, addColumnMatch[1], addColumnMatch[2]);
   }
 
-  const createIndexMatch = normalized.match(/^CREATE (?:UNIQUE )?INDEX(?: IF NOT EXISTS)? "([^"]+)"/i);
+  const createIndexMatch = normalized.match(
+    /^CREATE (?:UNIQUE )?INDEX(?: CONCURRENTLY)?(?: IF NOT EXISTS)? "([^"]+)"/i,
+  );
   if (createIndexMatch) {
     return indexExists(sql, createIndexMatch[1]);
   }
@@ -662,13 +696,7 @@ export async function applyPendingMigrations(url: string): Promise<void> {
   if (initialState.status === "upToDate") return;
 
   if (initialState.reason === "no-migration-journal-empty-db") {
-    const sql = createUtilitySql(url);
-    try {
-      const db = drizzlePg(sql);
-      await migratePg(db, { migrationsFolder: MIGRATIONS_FOLDER });
-    } finally {
-      await sql.end();
-    }
+    await applyPendingMigrationsManually(url, initialState.pendingMigrations);
 
     let bootstrappedState = await inspectMigrations(url);
     if (bootstrappedState.status === "upToDate") return;
@@ -745,8 +773,7 @@ export async function migratePostgresIfEmpty(url: string): Promise<MigrationBoot
       return { migrated: false, reason: "not-empty-no-migration-journal", tableCount };
     }
 
-    const db = drizzlePg(sql);
-    await migratePg(db, { migrationsFolder: MIGRATIONS_FOLDER });
+    await applyPendingMigrationsManually(url, await listMigrationFiles());
 
     return { migrated: true, reason: "migrated-empty-db", tableCount: 0 };
   } finally {

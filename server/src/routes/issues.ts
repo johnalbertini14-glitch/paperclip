@@ -87,6 +87,7 @@ import {
   issueThreadInteractionService,
   ISSUE_LIST_DEFAULT_LIMIT,
   ISSUE_LIST_MAX_LIMIT,
+  MAX_ISSUE_COMMENT_PAGE_LIMIT,
   issueReferenceService,
   issueService,
   clampIssueListLimit,
@@ -159,7 +160,6 @@ import {
 } from "../services/trust-preset-resolver.js";
 import { externalObjectService } from "../services/external-objects.js";
 
-const MAX_ISSUE_COMMENT_LIMIT = 500;
 const updateIssueRouteSchema = updateIssueSchema.extend({
   interrupt: z.boolean().optional(),
 });
@@ -7155,8 +7155,8 @@ export function issueRoutes(
         : null;
     const limit =
       limitRaw && Number.isFinite(limitRaw) && limitRaw > 0
-        ? Math.min(Math.floor(limitRaw), MAX_ISSUE_COMMENT_LIMIT)
-        : MAX_ISSUE_COMMENT_LIMIT; // cap omitted-limit callers at a safe bound
+        ? Math.min(Math.floor(limitRaw), MAX_ISSUE_COMMENT_PAGE_LIMIT)
+        : MAX_ISSUE_COMMENT_PAGE_LIMIT; // cap omitted-limit callers at a safe bound
     const comments = await svc.listComments(id, {
       afterCommentId,
       order,

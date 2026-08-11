@@ -44,6 +44,32 @@ if (!embeddedPostgresSupport.supported) {
 
 describeEmbeddedPostgres("applyPendingMigrations", () => {
   it(
+    "applies concurrent indexes with valid catalog state outside migration transactions",
+    async () => {
+      const connectionString = await createTempDatabase();
+      await applyPendingMigrations(connectionString);
+
+      const sql = postgres(connectionString, { max: 1, onnotice: () => {} });
+      try {
+        const indexes = await sql.unsafe<{ indexname: string; indisvalid: boolean; indisready: boolean }[]>(`
+          SELECT c.relname AS indexname, i.indisvalid, i.indisready
+          FROM pg_class c
+          JOIN pg_index i ON i.indexrelid = c.oid
+          WHERE c.relname IN (
+            'heartbeat_runs_company_context_issue_created_idx',
+            'activity_log_company_entity_run_idx'
+          )
+          ORDER BY c.relname
+        `);
+        expect(indexes).toHaveLength(2);
+        expect(indexes.every((index) => index.indisvalid && index.indisready)).toBe(true);
+      } finally {
+        await sql.end();
+      }
+    },
+    20_000,
+  );
+  it(
     "applies an inserted earlier migration without replaying later legacy migrations",
     async () => {
       const connectionString = await createTempDatabase();

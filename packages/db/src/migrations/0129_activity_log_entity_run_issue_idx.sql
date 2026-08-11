@@ -7,7 +7,8 @@
 --
 -- CONCURRENTLY: builds the partial index without holding a write lock on the table,
 -- so inserts/updates continue uninterrupted during the build on production data.
-CREATE INDEX IF NOT EXISTS "activity_log_company_entity_run_idx"
+-- The Paperclip migration runner detects this form and executes it outside its
+-- per-migration BEGIN/COMMIT wrapper, as PostgreSQL requires.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "activity_log_company_entity_run_idx"
   ON "activity_log" USING btree ("company_id", "entity_type", "entity_id", "run_id")
-  WHERE "run_id" IS NOT NULL
-  CONCURRENTLY;
+  WHERE "run_id" IS NOT NULL;
