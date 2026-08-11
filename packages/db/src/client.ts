@@ -270,25 +270,91 @@ async function applyPendingMigrationsManually(
         migrationFile,
         hash,
       );
-      if (existingEntry) continue;
 
       const statements = splitMigrationStatements(migrationContent);
-      if (statements.some(isConcurrentIndexStatement)) {
+      const hasConcurrentIndex = statements.some(isConcurrentIndexStatement);
+
+      if (existingEntry && !hasConcurrentIndex) continue;
+
+      // For CONCURRENTLY indexes: even when history records the migration as applied,
+      // the index may be corrupt (cancelled build that still committed the journal).
+      // Check validity first; if the index is valid we skip safely (IF NOT EXISTS
+      // is a no-op on a valid index).  If invalid we fall through to repair it.
+      let indexRepairAlreadyRecorded = false;
+      if (existingEntry && hasConcurrentIndex) {
+        const allConcurrentIndexNames: string[] = [];
+        for (const s of statements) {
+          const m = /^CREATE (?:UNIQUE )?INDEX CONCURRENTLY(?: IF NOT EXISTS)? "([^"]+)"/i.exec(
+            normalizeMigrationStatement(s),
+          );
+          if (m) allConcurrentIndexNames.push(m[1]);
+        }
+        const validCounts = await Promise.all(
+          allConcurrentIndexNames.map(async (idx) => {
+            const rows = await (sql.unsafe as (q: string) => Promise<{ count: string }[]>)(
+              `SELECT COUNT(*) AS count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_index i ON i.indexrelid = c.oid WHERE n.nspname = 'public' AND c.relkind = 'i' AND c.relname = '${idx}' AND i.indisvalid = true AND i.indisready = true`,
+            );
+            const ok = Number(rows[0]?.count) > 0;
+            console.log(`[DBG pre] idx=${idx} valid=${ok} count=${rows[0]?.count}`);
+            return ok;
+          }),
+        );
+        if (validCounts.every(Boolean)) {
+          // All indexes are valid — skip this migration safely.
+          continue;
+        }
+        // At least one index is invalid — fall through to the repair block below.
+        // Do NOT re-record the journal entry since the migration is already applied.
+        indexRepairAlreadyRecorded = true;
+      }
+
+      if (hasConcurrentIndex) {
         // PostgreSQL rejects CREATE INDEX CONCURRENTLY inside a transaction.
         // Run the marked DDL in autocommit mode, then record its history in a
-        // separate statement. Migrations 0128/0129 each contain one such DDL
-        // statement; ordinary migrations retain the atomic path below.
+        // separate statement (unless it was already recorded and this is a repair).
         for (const statement of statements) {
           await sql.unsafe(statement);
+          // After a CONCURRENTLY index is created (or "created" via IF NOT EXISTS
+          // finding an invalid pre-existing index), verify the result is actually
+          // valid.  A cancelled build leaves an invalid index in the catalog.
+          // Repair it immediately so the schema converges to a usable state.
+          const match = /^CREATE (?:UNIQUE )?INDEX CONCURRENTLY(?: IF NOT EXISTS)? "([^"]+)"/i.exec(
+            normalizeMigrationStatement(statement),
+          );
+          if (match) {
+            const indexName = match[1];
+            // Use COUNT(*) rather than EXISTS to avoid postgres-js boolean casting quirks.
+            const rows = await (sql.unsafe as (q: string) => Promise<{ count: string }[]>)(
+              `SELECT COUNT(*) AS count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_index i ON i.indexrelid = c.oid WHERE n.nspname = 'public' AND c.relkind = 'i' AND c.relname = '${indexName}' AND i.indisvalid = true AND i.indisready = true`,
+            );
+            const valid = Number(rows[0]?.count) > 0;
+            console.log(`[DBG post] idx=${indexName} valid=${valid} count=${rows[0]?.count}`);
+            if (!valid) {
+              // Index is invalid — drop and rebuild.  Because the rebuild uses
+              // CONCURRENTLY it returns before the index is fully built; poll
+              // until indisvalid=true before considering repair done.
+              await sql.unsafe(`DROP INDEX IF EXISTS "${indexName}"`);
+              await sql.unsafe(statement);
+              for (let attempt = 0; attempt < 30; attempt++) {
+                const pollRows = await (sql.unsafe as (q: string) => Promise<{ count: string }[]>)(
+                  `SELECT COUNT(*) AS count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_index i ON i.indexrelid = c.oid WHERE n.nspname = 'public' AND c.relkind = 'i' AND c.relname = '${indexName}' AND i.indisvalid = true AND i.indisready = true`,
+                );
+                if (Number(pollRows[0]?.count) > 0) break;
+                await new Promise((resolve) => setTimeout(resolve, 500));
+              }
+            }
+          }
         }
-        await recordMigrationHistoryEntry(
-          sql,
-          qualifiedTable,
-          columnNames,
-          migrationFile,
-          hash,
-          folderMillisByFileName.get(migrationFile) ?? Date.now(),
-        );
+        if (!indexRepairAlreadyRecorded) {
+          await recordMigrationHistoryEntry(
+            sql,
+            qualifiedTable,
+            columnNames,
+            migrationFile,
+            hash,
+            folderMillisByFileName.get(migrationFile) ?? Date.now(),
+          );
+        }
       } else {
         await runInTransaction(sql, async () => {
           for (const statement of statements) {
@@ -372,6 +438,32 @@ async function columnExists(
   return rows[0]?.exists ?? false;
 }
 
+/**
+ * Returns true only when the named index exists AND is marked valid AND ready by
+ * PostgreSQL's catalog.  An index left behind by a cancelled or failed
+ * CREATE INDEX CONCURRENTLY has `indisvalid = false`; such an index must be
+ * rebuilt (or left unjournaled) rather than silently treated as applied.
+ */
+async function indexIsValid(
+  sql: ReturnType<typeof postgres>,
+  indexName: string,
+): Promise<boolean> {
+  const rows = await sql<{ exists: boolean }[]>`
+    SELECT EXISTS (
+      SELECT 1
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_index i ON i.indexrelid = c.oid
+      WHERE n.nspname = 'public'
+        AND c.relkind = 'i'
+        AND c.relname = ${indexName}
+        AND i.indisvalid = true
+        AND i.indisready = true
+    ) AS exists
+  `;
+  return rows[0]?.exists ?? false;
+}
+
 async function indexExists(
   sql: ReturnType<typeof postgres>,
   indexName: string,
@@ -387,6 +479,74 @@ async function indexExists(
     ) AS exists
   `;
   return rows[0]?.exists ?? false;
+}
+
+/**
+ * Scans all applied migration files for CONCURRENTLY index statements, verifies
+ * each index is valid in pg_index, and repairs any that are not.  Called by
+ * applyPendingMigrations even when the journal is up-to-date so that a cancelled
+ * build that committed its journal entry (leaving an invalid index) is caught
+ * and healed on the next migration run.
+ */
+async function repairInvalidConcurrentIndexes(
+  url: string,
+  availableMigrations: string[],
+): Promise<void> {
+  const sql = createUtilitySql(url);
+  try {
+    for (const migrationFile of availableMigrations) {
+      const migrationContent = await readMigrationFileContent(migrationFile);
+      const statements = splitMigrationStatements(migrationContent);
+      const concurrentlyStatements = statements.filter(isConcurrentIndexStatement);
+      if (concurrentlyStatements.length === 0) continue;
+
+      // Collect index names from this migration's CONCURRENTLY statements.
+      const indexNames: string[] = [];
+      for (const stmt of concurrentlyStatements) {
+        const m = /^CREATE (?:UNIQUE )?INDEX CONCURRENTLY(?: IF NOT EXISTS)? "([^"]+)"/i.exec(
+          normalizeMigrationStatement(stmt),
+        );
+        if (m) indexNames.push(m[1]);
+      }
+
+      // Check which indexes are invalid.
+      const validityResults = await Promise.all(
+        indexNames.map(async (idx) => {
+          const rows = await (sql.unsafe as (q: string) => Promise<{ count: string }[]>)(
+            `SELECT COUNT(*) AS count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_index i ON i.indexrelid = c.oid WHERE n.nspname = 'public' AND c.relkind = 'i' AND c.relname = '${idx}' AND i.indisvalid = true AND i.indisready = true`,
+          );
+          return { idx, valid: Number(rows[0]?.count) > 0 };
+        }),
+      );
+
+      for (const { idx, valid } of validityResults) {
+        if (valid) continue;
+        console.log(`[repairInvalidConcurrentIndexes] idx=${idx} is invalid — rebuilding`);
+        // Index is invalid — drop and rebuild with CONCURRENTLY.
+        await sql.unsafe(`DROP INDEX IF EXISTS "${idx}"`);
+        // Re-execute the CREATE INDEX CONCURRENTLY statement from the migration.
+        for (const stmt of concurrentlyStatements) {
+          const m = /^CREATE (?:UNIQUE )?INDEX CONCURRENTLY(?: IF NOT EXISTS)? "([^"]+)"/i.exec(
+            normalizeMigrationStatement(stmt),
+          );
+          if (m && m[1] === idx) {
+            await sql.unsafe(stmt);
+            // Poll until indisvalid=true.
+            for (let attempt = 0; attempt < 30; attempt++) {
+              const pollRows = await (sql.unsafe as (q: string) => Promise<{ count: string }[]>)(
+                `SELECT COUNT(*) AS count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_index i ON i.indexrelid = c.oid WHERE n.nspname = 'public' AND c.relkind = 'i' AND c.relname = '${idx}' AND i.indisvalid = true AND i.indisready = true`,
+              );
+              if (Number(pollRows[0]?.count) > 0) break;
+              await new Promise((resolve) => setTimeout(resolve, 500));
+            }
+            break;
+          }
+        }
+      }
+    }
+  } finally {
+    await sql.end();
+  }
 }
 
 async function constraintExists(
@@ -424,10 +584,19 @@ async function migrationStatementAlreadyApplied(
   }
 
   const createIndexMatch = normalized.match(
-    /^CREATE (?:UNIQUE )?INDEX(?: CONCURRENTLY)?(?: IF NOT EXISTS)? "([^"]+)"/i,
+    /^CREATE (?:UNIQUE )?INDEX CONCURRENTLY(?: IF NOT EXISTS)? "([^"]+)"/i,
   );
   if (createIndexMatch) {
-    return indexExists(sql, createIndexMatch[1]);
+    // CONCURRENTLY indexes can be left invalid by a cancelled build; check
+    // pg_index.indisvalid/indisready so an unusable leftover is not journaled.
+    return indexIsValid(sql, createIndexMatch[1]);
+  }
+
+  const createIndexMatchNonConcurrent = normalized.match(
+    /^CREATE (?:UNIQUE )?INDEX(?: IF NOT EXISTS)? "([^"]+)"/i,
+  );
+  if (createIndexMatchNonConcurrent) {
+    return indexExists(sql, createIndexMatchNonConcurrent[1]);
   }
 
   const addConstraintMatch = normalized.match(/^ALTER TABLE "([^"]+)" ADD CONSTRAINT "([^"]+)"/i);
@@ -693,7 +862,13 @@ export async function inspectMigrations(url: string): Promise<MigrationState> {
 
 export async function applyPendingMigrations(url: string): Promise<void> {
   const initialState = await inspectMigrations(url);
-  if (initialState.status === "upToDate") return;
+  if (initialState.status === "upToDate") {
+    // Even when all migrations are journaled, a CONCURRENTLY index may have been
+    // left invalid by a cancelled build that still committed its journal entry.
+    // Detect and repair that corruption before declaring the schema healthy.
+    await repairInvalidConcurrentIndexes(url, initialState.availableMigrations);
+    return;
+  }
 
   if (initialState.reason === "no-migration-journal-empty-db") {
     await applyPendingMigrationsManually(url, initialState.pendingMigrations);
