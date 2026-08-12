@@ -2003,7 +2003,11 @@ export function buildHostServices(
         const companyId = ensureCompanyId(params.companyId);
         await ensurePluginAvailableForCompany(companyId);
         if (!inCompany(await issues.getById(params.issueId), companyId)) return [];
-        return (await issues.listComments(params.issueId)) as IssueComment[];
+        return (await issues.listComments(params.issueId, {
+          afterCommentId: params.afterCommentId ?? null,
+          order: params.order ?? "desc",
+          limit: params.fullHistory ? Number.MAX_SAFE_INTEGER : (params.limit ?? 500),
+        })) as IssueComment[];
       },
       async createComment(params) {
         const companyId = ensureCompanyId(params.companyId);

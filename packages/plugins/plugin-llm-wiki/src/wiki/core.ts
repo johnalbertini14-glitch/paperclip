@@ -2714,7 +2714,7 @@ export async function assemblePaperclipSourceBundle(ctx: PluginContext, input: P
     }
 
     if (includeComments && remaining.value > 0) {
-      const comments = await ctx.issues.listComments(issue.id, input.companyId);
+      const comments = await ctx.issues.listComments(issue.id, input.companyId, { fullHistory: true });
       for (const comment of [...comments].sort((a, b) => (isoString(a.createdAt) ?? "").localeCompare(isoString(b.createdAt) ?? ""))) {
         const protectedComment = protectDistillationSourceBody({
           issue,

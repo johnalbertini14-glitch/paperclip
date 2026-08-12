@@ -5822,4 +5822,102 @@ describeEmbeddedPostgres("issueService.assertCheckoutOwner stale checkout adopti
     });
   });
 
+  describe("listComments fullHistory contract", () => {
+    it("returns all comments without a 500 cap when fullHistory is true", async () => {
+      const companyId = randomUUID();
+      const issueId = randomUUID();
+
+      await db.insert(companies).values({
+        id: companyId,
+        name: "Paperclip",
+        issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+        requireBoardApprovalForNewAgents: false,
+      });
+
+      await db.insert(issues).values({
+        id: issueId,
+        companyId,
+        title: "Full-history test issue",
+        status: "todo",
+        priority: "medium",
+      });
+
+      // Create 600 comments — more than MAX_ISSUE_COMMENT_PAGE_LIMIT (500).
+      const commentCount = 600;
+      const commentIds: string[] = [];
+      for (let i = 0; i < commentCount; i++) {
+        const id = randomUUID();
+        commentIds.push(id);
+        await db.insert(issueComments).values({
+          id,
+          companyId,
+          issueId,
+          body: `Comment ${i}`,
+          createdAt: new Date(`2026-01-01T${String(Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}:00.000Z`),
+          updatedAt: new Date(`2026-01-01T${String(Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}:00.000Z`),
+        });
+      }
+
+      // Without fullHistory: limited to MAX_ISSUE_COMMENT_PAGE_LIMIT.
+      const bounded = await svc.listComments(issueId, { order: "asc" });
+      expect(bounded.length).toBeLessThanOrEqual(500);
+
+      // With fullHistory=true: returns all comments without cap.
+      const all = await svc.listComments(issueId, { order: "asc", fullHistory: true });
+      expect(all.length).toBe(commentCount);
+    });
+
+    it("returns all comments when fullHistory is true and limit exceeds comment count", async () => {
+      const companyId = randomUUID();
+      const issueId = randomUUID();
+
+      await db.insert(companies).values({
+        id: companyId,
+        name: "Paperclip",
+        issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+        requireBoardApprovalForNewAgents: false,
+      });
+
+      await db.insert(issues).values({
+        id: issueId,
+        companyId,
+        title: "Full-history limit test issue",
+        status: "todo",
+        priority: "medium",
+      });
+
+      const commentIds = [randomUUID(), randomUUID(), randomUUID()];
+      await db.insert(issueComments).values([
+        {
+          id: commentIds[0],
+          companyId,
+          issueId,
+          body: "Comment 0",
+          createdAt: new Date("2026-01-01T10:00:00.000Z"),
+          updatedAt: new Date("2026-01-01T10:00:00.000Z"),
+        },
+        {
+          id: commentIds[1],
+          companyId,
+          issueId,
+          body: "Comment 1",
+          createdAt: new Date("2026-01-01T11:00:00.000Z"),
+          updatedAt: new Date("2026-01-01T11:00:00.000Z"),
+        },
+        {
+          id: commentIds[2],
+          companyId,
+          issueId,
+          body: "Comment 2",
+          createdAt: new Date("2026-01-01T12:00:00.000Z"),
+          updatedAt: new Date("2026-01-01T12:00:00.000Z"),
+        },
+      ]);
+
+      // fullHistory with explicit limit that exceeds actual count.
+      const all = await svc.listComments(issueId, { order: "asc", fullHistory: true, limit: 1000 });
+      expect(all.length).toBe(3);
+    });
+  });
+
 });

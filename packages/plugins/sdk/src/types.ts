@@ -1428,7 +1428,11 @@ export interface PluginIssuesClient {
       idempotencyKeyPrefix?: string | null;
     } & PluginIssueMutationActor,
   ): Promise<PluginIssueWakeupBatchResult[]>;
-  listComments(issueId: string, companyId: string): Promise<IssueComment[]>;
+  listComments(
+    issueId: string,
+    companyId: string,
+    options?: { afterCommentId?: string | null; order?: "asc" | "desc"; limit?: number | null; fullHistory?: boolean },
+  ): Promise<IssueComment[]>;
   createComment(
     issueId: string,
     body: string,

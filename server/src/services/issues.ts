@@ -6444,14 +6444,20 @@ export function issueService(db: Db) {
         afterCommentId?: string | null;
         order?: "asc" | "desc";
         limit?: number | null;
+        /** When true, bypasses MAX_ISSUE_COMMENT_PAGE_LIMIT for plugin/wiki/export consumers. */
+        fullHistory?: boolean;
       },
     ) => {
       const order = opts?.order === "asc" ? "asc" : "desc";
       const afterCommentId = opts?.afterCommentId?.trim() || null;
-      const limit =
-        opts?.limit && opts.limit > 0
-          ? Math.min(Math.floor(opts.limit), MAX_ISSUE_COMMENT_PAGE_LIMIT)
-          : MAX_ISSUE_COMMENT_PAGE_LIMIT;
+      // fullHistory allows plugin/wiki/export callers to retrieve the complete
+      // comment thread without the HTTP-route cap, while the HTTP API itself
+      // preserves the bounded default for direct consumers.
+      const limit = opts?.fullHistory
+        ? (opts.limit && opts.limit > 0 ? Math.floor(opts.limit) : Number.MAX_SAFE_INTEGER)
+        : (opts?.limit && opts?.limit > 0
+            ? Math.min(Math.floor(opts.limit), MAX_ISSUE_COMMENT_PAGE_LIMIT)
+            : MAX_ISSUE_COMMENT_PAGE_LIMIT);
 
       const conditions = [eq(issueComments.issueId, issueId)];
       if (afterCommentId) {

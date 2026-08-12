@@ -3669,7 +3669,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
           });
         }
       }
-      const comments = await issuesSvc.listComments(issue.id, { order: "asc" });
+      const comments = await issuesSvc.listComments(issue.id, { order: "asc", fullHistory: true });
       files[taskPath] = buildMarkdown(
         {
           name: issue.title,

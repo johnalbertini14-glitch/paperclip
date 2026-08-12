@@ -567,4 +567,53 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
     },
     20_000,
   );
+
+  it(
+    "rebuilds a cancelled/failed concurrent index when retrying migration",
+    async () => {
+      const connectionString = await createTempDatabase();
+      await applyPendingMigrations(connectionString);
+
+      const sql = postgres(connectionString, { max: 1, onnotice: () => {} });
+      try {
+        // Simulate a cancelled CREATE INDEX CONCURRENTLY by marking the index
+        // invalid (indisvalid=false) after its initial successful creation.
+        await sql.unsafe(`
+          UPDATE pg_index
+          SET indisvalid = false, indisready = false
+          WHERE indexrelid = (
+            SELECT c.oid
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public'
+              AND c.relkind = 'i'
+              AND c.relname = 'heartbeat_runs_company_context_issue_created_idx'
+          )
+        `);
+
+        // Verify the corruption took effect.
+        const corrupted = await (sql.unsafe as (q: string) => Promise<{ indisvalid: string; indisready: string; relname: string }[]>)(
+          "SELECT i.indisvalid::text as indisvalid, i.indisready::text as indisready, c.relname FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid WHERE c.relname = 'heartbeat_runs_company_context_issue_created_idx'"
+        );
+        console.log("[TEST DEBUG] corrupted=", JSON.stringify(corrupted));
+        expect(corrupted[0]?.indisvalid).toBe("false");
+        console.log("[TEST DEBUG] corruption verified, calling second applyPendingMigrations");
+        // The migration history records the index as already applied, but a
+        // retry must rebuild the invalid index rather than silently succeed.
+        await applyPendingMigrations(connectionString);
+
+        console.log("[TEST DEBUG] second applyPendingMigrations returned, checking repaired state");
+        // After retry the index must be valid and ready again.
+        const repaired = await (sql.unsafe as (q: string) => Promise<{ indisvalid: string; indisready: string; relname: string }[]>)(
+          "SELECT i.indisvalid::text as indisvalid, i.indisready::text as indisready, c.relname FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid WHERE c.relname = 'heartbeat_runs_company_context_issue_created_idx'"
+        );
+        console.log("[TEST DEBUG] repaired=", JSON.stringify(repaired));
+        expect(repaired[0]?.indisvalid).toBe("true");
+        expect(repaired[0]?.indisready).toBe("true");
+      } finally {
+        await sql.end();
+      }
+    },
+    20_000,
+  );
 });

@@ -1372,7 +1372,7 @@ export interface WorkerToHostMethods {
     result: PluginIssueOrchestrationSummary,
   ];
   "issues.listComments": [
-    params: { issueId: string; companyId: string },
+    params: { issueId: string; companyId: string; afterCommentId?: string | null; order?: "asc" | "desc"; limit?: number | null; fullHistory?: boolean },
     result: IssueComment[],
   ];
   "issues.createComment": [
