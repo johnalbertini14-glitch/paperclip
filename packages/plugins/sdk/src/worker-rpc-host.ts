@@ -854,8 +854,12 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
           });
         },
 
-        async listComments(issueId: string, companyId: string) {
-          return callHost("issues.listComments", { issueId, companyId });
+        async listComments(
+          issueId: string,
+          companyId: string,
+          options?: { afterCommentId?: string | null; order?: "asc" | "desc"; limit?: number | null; fullHistory?: boolean },
+        ) {
+          return callHost("issues.listComments", { issueId, companyId, ...options });
         },
 
         async createComment(issueId: string, body: string, companyId: string, options?: { authorAgentId?: string }) {

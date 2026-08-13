@@ -1,7 +1,7 @@
 # REVA-30407 rollout and read-path evidence
 
-Date: 2026-08-11 UTC  
-Source checkout: `reva-30327-issue-run-context-index`  
+Date: 2026-08-11 UTC
+Source checkout: `reva-30327-issue-run-context-index`
 Representative database: isolated local PostgreSQL database `reva30407_evidence_20260811` on the Paperclip embedded PostgreSQL 18.1 instance.
 
 ## Implementation verified

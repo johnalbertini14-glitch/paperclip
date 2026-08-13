@@ -539,6 +539,16 @@ async function repairInvalidConcurrentIndexes(
               if (Number(pollRows[0]?.count) > 0) break;
               await new Promise((resolve) => setTimeout(resolve, 500));
             }
+            // Final readback: confirm the index is now valid, or fail explicitly.
+            const finalRows = await (sql.unsafe as (q: string) => Promise<{ count: string }[]>)(
+              `SELECT COUNT(*) AS count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_index i ON i.indexrelid = c.oid WHERE n.nspname = 'public' AND c.relkind = 'i' AND c.relname = '${idx}' AND i.indisvalid = true AND i.indisready = true`,
+            );
+            if (Number(finalRows[0]?.count) === 0) {
+              throw new Error(
+                `repairInvalidConcurrentIndexes: index "${idx}" failed to become valid after rebuild. ` +
+                `Manual intervention required.`,
+              );
+            }
             break;
           }
         }
@@ -918,6 +928,10 @@ export async function applyPendingMigrations(url: string): Promise<void> {
       `Failed to apply pending migrations: ${finalState.pendingMigrations.join(", ")}`,
     );
   }
+
+  // Even when migrations applied cleanly, a CONCURRENTLY index may have been
+  // left invalid by a cancelled prior build. Repair before declaring healthy.
+  await repairInvalidConcurrentIndexes(url, finalState.availableMigrations);
 }
 
 export type MigrationBootstrapResult =

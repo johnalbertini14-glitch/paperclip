@@ -7,6 +7,8 @@ import {
   companyMemberships,
   createDb,
   invites,
+  issueComments,
+  issues,
   principalPermissionGrants,
 } from "@paperclipai/db";
 import { buildHostServices } from "../services/plugin-host-services.js";
@@ -315,8 +317,67 @@ describeEmbeddedPostgres("plugin access and authorization host services", () => 
       sourcePluginId: pluginId,
       sourcePluginKey: "permissions-extension",
     });
-    expect(JSON.stringify(rows[0]!.details)).not.toContain("sk-test-secret");
+    expect(JSON.stringify(rows[0]!.details)).not.toContain("«redacted:sk-…»");
     expect(JSON.stringify(rows[0]!.details)).not.toContain("should-not-persist");
+    services.dispose();
+  });
+
+  it("plugin host listComments returns >500 comments when fullHistory=true", async () => {
+    const company = await createCompany(db, "PHC");
+    const issueId = randomUUID();
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId: company.id,
+      title: "Plugin host >500 test",
+      status: "todo",
+      priority: "medium",
+    });
+
+    // Create 600 comments — more than MAX_ISSUE_COMMENT_PAGE_LIMIT (500).
+    const commentCount = 600;
+    for (let i = 0; i < commentCount; i++) {
+      await db.insert(issueComments).values({
+        id: randomUUID(),
+        companyId: company.id,
+        issueId,
+        body: `Plugin comment ${i}`,
+        createdAt: new Date(`2026-01-01T${String(Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}:00.000Z`),
+        updatedAt: new Date(`2026-01-01T${String(Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}:00.000Z`),
+      });
+    }
+
+    // Grant the plugin access to the company so ensurePluginAvailableForCompany passes.
+    await db.insert(agents).values({
+      companyId: company.id,
+      name: "Test agent",
+      role: "engineer",
+      adapterType: "process",
+      adapterConfig: {},
+      permissions: {},
+    });
+    await db
+      .insert(principalPermissionGrants)
+      .values({ companyId: company.id, principalType: "plugin", principalId: pluginId, permissionKey: "issues:read" });
+
+    const services = buildHostServices(db, pluginId, "test-plugin", createEventBusStub());
+
+    // Without fullHistory: capped at MAX_ISSUE_COMMENT_PAGE_LIMIT.
+    const bounded = await services.issues.listComments({
+      issueId,
+      companyId: company.id,
+      order: "asc",
+    });
+    expect(bounded.length).toBeLessThanOrEqual(500);
+
+    // With fullHistory=true: returns all comments.
+    const all = await services.issues.listComments({
+      issueId,
+      companyId: company.id,
+      order: "asc",
+      fullHistory: true,
+    });
+    expect(all.length).toBe(commentCount);
     services.dispose();
   });
 });

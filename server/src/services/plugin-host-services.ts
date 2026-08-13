@@ -2007,6 +2007,7 @@ export function buildHostServices(
           afterCommentId: params.afterCommentId ?? null,
           order: params.order ?? "desc",
           limit: params.fullHistory ? Number.MAX_SAFE_INTEGER : (params.limit ?? 500),
+          fullHistory: params.fullHistory ?? false,
         })) as IssueComment[];
       },
       async createComment(params) {
