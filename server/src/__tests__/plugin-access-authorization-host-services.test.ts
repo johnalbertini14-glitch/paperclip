@@ -57,6 +57,8 @@ describeEmbeddedPostgres("plugin access and authorization host services", () => 
     await db.delete(activityLog);
     await db.delete(principalPermissionGrants);
     await db.delete(invites);
+    await db.delete(issueComments);
+    await db.delete(issues);
     await db.delete(agents);
     await db.delete(companyMemberships);
     await db.delete(companies);
