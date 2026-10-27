@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, notInArray, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, notInArray, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -1722,6 +1722,19 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
         if (!oldest || row.createdAt < oldest) return row.createdAt;
         return oldest;
       }, null);
+      // Restrict newer-run lookup to keys produced by failed rows. Preserve
+      // readRunIssueId's issueId/taskId fallback and its unresolved null key.
+      const failedRunIssueId = sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`;
+      const failedRunTaskId = sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'taskId'`;
+      const failedIssueIdValues = [...new Set(failedIssueIds.filter((id): id is string => typeof id === "string" && id.length > 0))];
+      const hasUnresolvedFailedKey = failedIssueIds.some((id) => id === null);
+      const failedRunKeyScope = or(
+        failedIssueIdValues.length > 0 ? inArray(failedRunIssueId, failedIssueIdValues) : undefined,
+        failedIssueIdValues.length > 0 ? inArray(failedRunTaskId, failedIssueIdValues) : undefined,
+        hasUnresolvedFailedKey
+          ? sql`(${failedRunIssueId} = '' or (${failedRunIssueId} is null and (${failedRunTaskId} is null or ${failedRunTaskId} = '')))`
+          : undefined,
+      );
       const [failedIssueMap, failedImageMap, newerRuns] = await Promise.all([
         issueSummaryMap(
           db,
@@ -1737,14 +1750,15 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
               createdAt: heartbeatRuns.createdAt,
               // Project just the ids readRunIssueId needs; pulling the whole
               // context_snapshot detoasts megabytes per feed build.
-              runIssueId: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`,
-              runTaskId: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'taskId'`,
+              runIssueId: failedRunIssueId,
+              runTaskId: failedRunTaskId,
             })
             .from(heartbeatRuns)
             .where(and(
               eq(heartbeatRuns.companyId, companyId),
               inArray(heartbeatRuns.agentId, failedAgentIds),
               gt(heartbeatRuns.createdAt, oldestFailedRunCreatedAt),
+              failedRunKeyScope,
             ))
           : Promise.resolve([]),
       ]);

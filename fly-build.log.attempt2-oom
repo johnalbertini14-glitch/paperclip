@@ -1,0 +1,939 @@
+Error: no access token available. Please login with 'flyctl auth login'
+==> Verifying app config
+Validating /opt/data/work/paperclip-candidate-v1023/fly.toml
+[32m✓[0m Configuration is valid
+--> Verified app config
+==> Building image
+
+WARN Build context is 162 MB across 12,028 files. It is uploaded to the builder on
+     every deploy, and a large context can make builds noticeably slower.
+     Largest paths in the context:
+       packages/  50 MB
+       server/    45 MB
+       ui/        27 MB
+       doc/       14 MB
+       docs/      9.6 MB
+     If some of these don't need to be in the image, add them to .dockerignore:
+     https://docs.docker.com/build/concepts/context/#dockerignore-files
+     (disable with --build-context-warn-size 0)
+Waiting for depot builder...
+
+==> Building image with Depot
+--> build:  (​)
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 18.80kB 0.1s done
+#1 DONE 0.1s
+
+#2 resolve image config for docker-image://docker.io/docker/dockerfile:1.20
+#2 DONE 0.2s
+
+#3 docker-image://docker.io/docker/dockerfile:1.20@sha256:26147acbda4f14c5add9946e2fd2ed543fc402884fd75146bd342a7f6271dc1d
+#3 resolve docker.io/docker/dockerfile:1.20@sha256:26147acbda4f14c5add9946e2fd2ed543fc402884fd75146bd342a7f6271dc1d done
+#3 CACHED
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 18.80kB 0.1s done
+#1 DONE 0.1s
+
+#4 [internal] load build definition from Dockerfile
+#4 Deduplicating step ID [internal] load build definition from Dockerfile, another build is calculating it done
+#4 DONE 0.0s
+
+#5 [internal] load metadata for docker.io/library/node:24-trixie-slim
+#5 DONE 0.3s
+
+#6 [internal] load .dockerignore
+#6 transferring context: 2.77kB 0.0s done
+#6 DONE 0.1s
+
+#7 [base 1/3] FROM docker.io/library/node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
+#7 resolve docker.io/library/node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea done
+#7 DONE 0.0s
+
+#8 [internal] load build context
+#8 ...
+
+#9 [production 2/7] RUN echo "cli-tools-epoch: "   && npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai @google/gemini-cli@latest @moonshot-ai/kimi-code@latest   && apt-get update   && apt-get install -y --no-install-recommends openssh-client jq   && rm -rf /var/lib/apt/lists/*   && mkdir -p /paperclip   && chown node:node /paperclip
+#9 CACHED
+
+#10 [base 2/3] RUN apt-get update   && apt-get install -y --no-install-recommends ca-certificates gosu curl gh git wget ripgrep python3 tini   && rm -rf /var/lib/apt/lists/*   && corepack enable
+#10 CACHED
+
+#11 [production 3/7] COPY scripts/docker-entrypoint.sh /usr/local/bin/
+#11 CACHED
+
+#12 [deps  1/36] WORKDIR /app
+#12 CACHED
+
+#13 [base 3/3] RUN usermod -u 1000 --non-unique node   && groupmod -g 1000 --non-unique node   && usermod -g 1000 -d /paperclip node
+#13 CACHED
+
+#14 [production 4/7] RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+#14 CACHED
+
+#15 [deps 18/36] COPY packages/adapters/codex-local/package.json packages/adapters/codex-local/
+#15 CACHED
+
+#16 [deps 33/36] COPY packages/plugins/plugin-workspace-diff/package.json packages/plugins/plugin-workspace-diff/
+#16 CACHED
+
+#17 [deps 29/36] COPY packages/plugins/sdk/package.json packages/plugins/sdk/
+#17 CACHED
+
+#18 [deps 30/36] COPY --parents packages/plugins/sandbox-providers/./*/package.json packages/plugins/sandbox-providers/
+#18 CACHED
+
+#19 [deps 31/36] COPY packages/plugins/paperclip-plugin-fake-sandbox/package.json packages/plugins/paperclip-plugin-fake-sandbox/
+#19 CACHED
+
+#20 [deps 32/36] COPY packages/plugins/plugin-llm-wiki/package.json packages/plugins/plugin-llm-wiki/
+#20 CACHED
+
+#21 [deps 28/36] COPY packages/adapters/pi-local/package.json packages/adapters/pi-local/
+#21 CACHED
+
+#22 [deps 14/36] COPY packages/skills-catalog/package.json packages/skills-catalog/
+#22 CACHED
+
+#23 [deps  5/36] COPY ui/package.json ui/
+#23 CACHED
+
+#24 [deps  3/36] COPY cli/package.json cli/
+#24 CACHED
+
+#25 [deps 12/36] COPY packages/paperclip-eval-kernel/package.json packages/paperclip-eval-kernel/
+#25 CACHED
+
+#26 [deps  9/36] COPY packages/google-sheets-mcp-server/package.json packages/google-sheets-mcp-server/
+#26 CACHED
+
+#27 [deps 11/36] COPY packages/mcp-server/package.json packages/mcp-server/
+#27 CACHED
+
+#28 [deps 19/36] COPY packages/adapters/cursor-cloud/package.json packages/adapters/cursor-cloud/
+#28 CACHED
+
+#29 [deps 20/36] COPY packages/adapters/cursor-local/package.json packages/adapters/cursor-local/
+#29 CACHED
+
+#30 [deps 16/36] COPY packages/teams-catalog/package.json packages/teams-catalog/
+#30 CACHED
+
+#31 [deps  4/36] COPY server/package.json server/
+#31 CACHED
+
+#32 [deps 17/36] COPY packages/adapters/claude-local/package.json packages/adapters/claude-local/
+#32 CACHED
+
+#33 [deps 25/36] COPY packages/adapters/hermes-gateway/package.json packages/adapters/hermes-gateway/
+#33 CACHED
+
+#34 [deps 21/36] COPY packages/adapters/gemini-local/package.json packages/adapters/gemini-local/
+#34 CACHED
+
+#35 [deps  6/36] COPY packages/shared/package.json packages/shared/
+#35 CACHED
+
+#36 [deps 34/36] COPY patches/ patches/
+#36 CACHED
+
+#37 [deps 27/36] COPY packages/adapters/opencode-local/package.json packages/adapters/opencode-local/
+#37 CACHED
+
+#38 [deps 15/36] COPY packages/tailscale-https-broker/package.json packages/tailscale-https-broker/
+#38 CACHED
+
+#39 [deps 24/36] COPY packages/adapters/hermes/package.json packages/adapters/hermes/
+#39 CACHED
+
+#40 [deps 26/36] COPY packages/adapters/openclaw-gateway/package.json packages/adapters/openclaw-gateway/
+#40 CACHED
+
+#41 [deps  2/36] COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
+#41 CACHED
+
+#42 [deps 13/36] COPY packages/paperclip-runner/package.json packages/paperclip-runner/
+#42 CACHED
+
+#43 [deps 22/36] COPY packages/adapters/grok-local/package.json packages/adapters/grok-local/
+#43 CACHED
+
+#44 [deps  7/36] COPY packages/db/package.json packages/db/
+#44 CACHED
+
+#45 [deps  8/36] COPY packages/adapter-utils/package.json packages/adapter-utils/
+#45 CACHED
+
+#46 [deps 23/36] COPY packages/adapters/kimi-local/package.json packages/adapters/kimi-local/
+#46 CACHED
+
+#47 [deps 10/36] COPY packages/kv-demo-mcp-server/package.json packages/kv-demo-mcp-server/
+#47 CACHED
+
+#48 [deps 35/36] COPY scripts/link-plugin-dev-sdk.mjs scripts/
+#48 CACHED
+
+#49 [rust-toolchain 3/5] RUN set -eux;     arch="$(dpkg --print-architecture)";     case "$arch" in       amd64) rustTarget="x86_64-unknown-linux-gnu"; sha256="4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10" ;;       arm64) rustTarget="aarch64-unknown-linux-gnu"; sha256="9732d6c5e2a098d3521fca8145d826ae0aaa067ef2385ead08e6feac88fa5792" ;;       *) echo "unsupported architecture: $arch" >&2; exit 1 ;;     esac;     curl -fsSLo /tmp/rustup-init "https://static.rust-lang.org/rustup/archive/1.29.0/${rustTarget}/rustup-init";     echo "${sha256}  /tmp/rustup-init" | sha256sum -c -;     chmod +x /tmp/rustup-init;     /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain none;     rm /tmp/rustup-init
+#49 CACHED
+
+#50 [rust-toolchain 2/5] RUN apt-get update   && apt-get install -y --no-install-recommends gcc libc6-dev pkg-config   && rm -rf /var/lib/apt/lists/*
+#50 CACHED
+
+#51 [rust-toolchain 4/5] COPY packages/paperclip-runner/rust-toolchain.toml /tmp/runner-toolchain/rust-toolchain.toml
+#51 CACHED
+
+#52 [rust-toolchain 5/5] RUN cd /tmp/runner-toolchain && rustup show
+#52 CACHED
+
+#8 [internal] load build context
+#8 transferring context: 162.74MB 4.8s done
+#8 ...
+
+#53 [rust-chef 1/1] RUN cd /tmp/runner-toolchain && cargo install cargo-chef --version 0.1.73 --locked
+#53 0.408     Updating crates.io index
+#53 0.843  Downloading crates ...
+#53 0.976   Downloaded cargo-chef v0.1.73
+#53 1.044   Installing cargo-chef v0.1.73
+#53 1.044 warning: default toolchain implicitly overridden with `1.97.1-x86_64-unknown-linux-gnu` by rustup toolchain file
+#53 1.044   |
+#53 1.044   = help: use `cargo +stable install` if you meant to use the stable toolchain
+#53 1.044   = note: rustup selects the toolchain based on the parent environment and not the environment of the package being installed
+#53 1.048     Updating crates.io index
+#53 1.542     Updating crates.io index
+#53 1.623  Downloading crates ...
+#53 1.638   Downloaded bitflags v1.3.2
+#53 1.646   Downloaded crossbeam-utils v0.8.21
+#53 1.652   Downloaded anstyle v1.0.10
+#53 1.655   Downloaded anstyle-parse v0.2.6
+#53 1.658   Downloaded cargo-platform v0.1.9
+#53 1.660   Downloaded anstyle-query v1.1.2
+#53 1.662   Downloaded autocfg v1.4.0
+#53 1.666   Downloaded is_terminal_polyfill v1.70.1
+#53 1.668   Downloaded clap_derive v4.5.24
+#53 1.673   Downloaded anstream v0.6.18
+#53 1.677   Downloaded same-file v1.0.6
+#53 1.681   Downloaded globwalk v0.8.1
+#53 1.684   Downloaded itoa v1.0.14
+#53 1.687   Downloaded strsim v0.11.1
+#53 1.690   Downloaded camino v1.1.9
+#53 1.694   Downloaded clap_lex v0.7.4
+#53 1.696   Downloaded colorchoice v1.0.3
+#53 1.697   Downloaded heck v0.5.0
+#53 1.700   Downloaded serde_spanned v0.6.8
+#53 1.702   Downloaded pathdiff v0.2.3
+#53 1.704   Downloaded equivalent v1.0.1
+#53 1.705   Downloaded expect-test v1.5.1
+#53 1.708   Downloaded is-terminal v0.4.15
+#53 1.710   Downloaded toml_datetime v0.6.8
+#53 1.712   Downloaded utf8parse v0.2.2
+#53 1.714   Downloaded cargo_metadata v0.15.4
+#53 1.717   Downloaded cargo-manifest v0.18.1
+#53 1.721   Downloaded globset v0.4.15
+#53 1.723   Downloaded thiserror-impl v2.0.11
+#53 1.726   Downloaded humantime v2.1.0
+#53 1.729   Downloaded crossbeam-deque v0.8.6
+#53 1.733   Downloaded dissimilar v1.0.9
+#53 1.736   Downloaded ryu v1.0.19
+#53 1.743   Downloaded semver v1.0.25
+#53 1.747   Downloaded termcolor v1.4.1
+#53 1.750   Downloaded thiserror v1.0.69
+#53 1.762   Downloaded thiserror v2.0.11
+#53 1.778   Downloaded thiserror-impl v1.0.69
+#53 1.780   Downloaded walkdir v2.5.0
+#53 1.784   Downloaded anyhow v1.0.95
+#53 1.792   Downloaded clap v4.5.27
+#53 1.813   Downloaded crossbeam-epoch v0.9.18
+#53 1.818   Downloaded fs-err v2.11.0
+#53 1.822   Downloaded log v0.4.25
+#53 1.826   Downloaded once_cell v1.20.2
+#53 1.831   Downloaded quote v1.0.38
+#53 1.837   Downloaded serde_derive v1.0.217
+#53 1.843   Downloaded unicode-ident v1.0.16
+#53 1.848   Downloaded ignore v0.4.23
+#53 1.852   Downloaded proc-macro2 v1.0.93
+#53 1.857   Downloaded serde v1.0.217
+#53 1.863   Downloaded toml v0.8.19
+#53 1.869   Downloaded env_logger v0.10.2
+#53 1.875   Downloaded indexmap v2.7.1
+#53 1.884   Downloaded aho-corasick v1.1.3
+#53 1.894   Downloaded memchr v2.7.4
+#53 1.905   Downloaded toml_edit v0.22.22
+#53 1.971   Downloaded clap_builder v4.5.27
+#53 1.984   Downloaded hashbrown v0.15.2
+#53 1.993   Downloaded serde_json v1.0.138
+#53 2.009   Downloaded winnow v0.6.25
+#53 2.027   Downloaded regex v1.11.1
+#53 2.057   Downloaded syn v2.0.96
+#53 2.077   Downloaded bstr v1.11.3
+#53 2.092   Downloaded regex-syntax v0.8.5
+#53 2.105   Downloaded regex-automata v0.4.9
+#53 2.136   Downloaded libc v0.2.169
+#53 2.224    Compiling proc-macro2 v1.0.93
+#53 2.224    Compiling unicode-ident v1.0.16
+#53 2.224    Compiling serde v1.0.217
+#53 2.224    Compiling memchr v2.7.4
+#53 2.777    Compiling regex-syntax v0.8.5
+#53 6.285    Compiling aho-corasick v1.1.3
+#53 9.433    Compiling crossbeam-utils v0.8.21
+#53 9.619    Compiling regex-automata v0.4.9
+#53 ...
+
+#54 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#54 0.369 ! Corepack is about to download https://registry.npmjs.org/pnpm/-/pnpm-9.15.4.tgz
+#54 1.790 Scope: all 31 workspace projects
+#54 1.805 (node:6) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+#54 1.805 (Use `node --trace-deprecation ...` to show where the warning was created)
+#54 2.023 Progress: resolved 1, reused 0, downloaded 0, added 0
+#54 2.070 
+#54 2.070    ╭───────────────────────────────────────────────────────────────────╮
+#54 2.070    │                                                                   │
+#54 2.070    │                Update available! 9.15.4 → 12.15.0.                │
+#54 2.070    │   Changelog: https://github.com/pnpm/pnpm/releases/tag/v12.15.0   │
+#54 2.070    │         Run "corepack install -g pnpm@12.15.0" to update.         │
+#54 2.070    │                                                                   │
+#54 2.070    ╰───────────────────────────────────────────────────────────────────╯
+#54 2.070 
+#54 3.066 Progress: resolved 17, reused 0, downloaded 0, added 0
+#54 4.067 Progress: resolved 43, reused 0, downloaded 0, added 0
+#54 4.397 server                                   |  WARN  deprecated @types/sharp@0.32.0
+#54 5.067 Progress: resolved 69, reused 0, downloaded 0, added 0
+#54 6.087 Progress: resolved 91, reused 0, downloaded 0, added 0
+#54 7.134 Progress: resolved 132, reused 0, downloaded 0, added 0
+#54 8.134 Progress: resolved 208, reused 0, downloaded 0, added 0
+#54 9.139 Progress: resolved 280, reused 0, downloaded 0, added 0
+#54 10.14 Progress: resolved 306, reused 0, downloaded 0, added 0
+#54 ...
+
+#53 [rust-chef 1/1] RUN cd /tmp/runner-toolchain && cargo install cargo-chef --version 0.1.73 --locked
+#53 11.03    Compiling quote v1.0.38
+#53 11.63    Compiling syn v2.0.96
+#53 12.49    Compiling hashbrown v0.15.2
+#53 13.76    Compiling log v0.4.25
+#53 14.11    Compiling libc v0.2.169
+#53 14.59    Compiling equivalent v1.0.1
+#53 14.65    Compiling utf8parse v0.2.2
+#53 14.73    Compiling anstyle-parse v0.2.6
+#53 14.98    Compiling indexmap v2.7.1
+#53 16.45    Compiling crossbeam-epoch v0.9.18
+#53 16.45    Compiling bstr v1.11.3
+#53 17.01    Compiling thiserror v2.0.11
+#53 17.18    Compiling serde_derive v1.0.217
+#53 17.19    Compiling autocfg v1.4.0
+#53 17.37    Compiling serde_json v1.0.138
+#53 17.53    Compiling winnow v0.6.25
+#53 17.79    Compiling is_terminal_polyfill v1.70.1
+#53 17.88    Compiling semver v1.0.25
+#53 18.15    Compiling colorchoice v1.0.3
+#53 18.23    Compiling anstyle v1.0.10
+#53 18.53    Compiling same-file v1.0.6
+#53 18.69    Compiling anstyle-query v1.1.2
+#53 18.85    Compiling camino v1.1.9
+#53 19.16    Compiling thiserror v1.0.69
+#53 19.65    Compiling anstream v0.6.18
+#53 20.22    Compiling walkdir v2.5.0
+#53 20.74    Compiling fs-err v2.11.0
+#53 21.02    Compiling thiserror-impl v2.0.11
+#53 ...
+
+#54 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#54 11.16 Progress: resolved 384, reused 0, downloaded 0, added 0
+#54 12.17 Progress: resolved 558, reused 0, downloaded 0, added 0
+#54 13.17 Progress: resolved 665, reused 0, downloaded 0, added 0
+#54 14.21 Progress: resolved 734, reused 0, downloaded 0, added 0
+#54 15.21 Progress: resolved 994, reused 0, downloaded 0, added 0
+#54 16.35 Progress: resolved 1068, reused 0, downloaded 0, added 0
+#54 17.35 Progress: resolved 1305, reused 0, downloaded 0, added 0
+#54 18.25  WARN  5 deprecated subdependencies found: @esbuild-kit/core-utils@3.3.2, @esbuild-kit/esm-loader@2.6.5, @ungap/structured-clone@1.3.0, node-domexception@1.0.0, uuid@10.0.0
+#54 18.41 Progress: resolved 1575, reused 0, downloaded 0, added 0
+#54 18.42 Progress: resolved 1575, reused 0, downloaded 0, added 0, done
+#54 18.42 
+#54 18.43  WARN  Issues with peer dependencies found
+#54 18.43 server
+#54 18.43 └─┬ better-auth 1.7.2
+#54 18.43   └── ✕ unmet peer vitest@"^2.0.0 || ^3.0.0 || ^4.0.0": found 5.0.3
+#54 18.43 
+#54 18.43 Done in 17.1s
+#54 19.17 Scope: all 31 workspace projects
+#54 19.19 (node:18) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+#54 19.19 (Use `node --trace-deprecation ...` to show where the warning was created)
+#54 19.29 Lockfile is up to date, resolution step is skipped
+#54 19.40 Progress: resolved 1, reused 0, downloaded 0, added 0
+#54 19.61 Packages: +1323
+#54 19.61 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#54 20.41 Progress: resolved 1323, reused 0, downloaded 14, added 0
+#54 21.42 Progress: resolved 1323, reused 0, downloaded 38, added 25
+#54 ...
+
+#53 [rust-chef 1/1] RUN cd /tmp/runner-toolchain && cargo install cargo-chef --version 0.1.73 --locked
+#53 21.56    Compiling thiserror-impl v1.0.69
+#53 22.81    Compiling globset v0.4.15
+#53 23.23    Compiling crossbeam-deque v0.8.6
+#53 24.99    Compiling serde_spanned v0.6.8
+#53 25.22    Compiling toml_datetime v0.6.8
+#53 25.25    Compiling strsim v0.11.1
+#53 25.75    Compiling toml_edit v0.22.22
+#53 26.42    Compiling anyhow v1.0.95
+#53 27.04    Compiling itoa v1.0.14
+#53 27.24    Compiling ryu v1.0.19
+#53 27.79    Compiling heck v0.5.0
+#53 27.80    Compiling clap_lex v0.7.4
+#53 28.15    Compiling clap_derive v4.5.24
+#53 28.37    Compiling clap_builder v4.5.27
+#53 ...
+
+#54 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#54 22.42 Progress: resolved 1323, reused 0, downloaded 60, added 48
+#54 23.44 Progress: resolved 1323, reused 0, downloaded 149, added 143
+#54 24.44 Progress: resolved 1323, reused 0, downloaded 181, added 174
+#54 25.44 Progress: resolved 1323, reused 0, downloaded 211, added 208
+#54 26.45 Progress: resolved 1323, reused 0, downloaded 231, added 226
+#54 27.45 Progress: resolved 1323, reused 0, downloaded 242, added 234
+#54 28.45 Progress: resolved 1323, reused 0, downloaded 247, added 238
+#54 44.34 Progress: resolved 1323, reused 0, downloaded 248, added 238
+#54 45.34 Progress: resolved 1323, reused 0, downloaded 249, added 240
+#54 46.34 Progress: resolved 1323, reused 0, downloaded 249, added 242
+#54 47.34 Progress: resolved 1323, reused 0, downloaded 250, added 243
+#54 48.34 Progress: resolved 1323, reused 0, downloaded 265, added 255
+#54 49.43 Progress: resolved 1323, reused 0, downloaded 305, added 299
+#54 ...
+
+#53 [rust-chef 1/1] RUN cd /tmp/runner-toolchain && cargo install cargo-chef --version 0.1.73 --locked
+#53 49.70    Compiling toml v0.8.19
+#53 55.74    Compiling is-terminal v0.4.15
+#53 56.68    Compiling cargo-platform v0.1.9
+#53 58.60    Compiling ignore v0.4.23
+#53 ...
+
+#54 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#54 50.43 Progress: resolved 1323, reused 0, downloaded 314, added 309
+#54 51.43 Progress: resolved 1323, reused 0, downloaded 319, added 314
+#54 56.24 Progress: resolved 1323, reused 0, downloaded 320, added 314
+#54 57.24 Progress: resolved 1323, reused 0, downloaded 333, added 327
+#54 58.24 Progress: resolved 1323, reused 0, downloaded 363, added 354
+#54 59.24 Progress: resolved 1323, reused 0, downloaded 394, added 383
+#54 60.25 Progress: resolved 1323, reused 0, downloaded 419, added 407
+#54 61.25 Progress: resolved 1323, reused 0, downloaded 434, added 426
+#54 ...
+
+#53 [rust-chef 1/1] RUN cd /tmp/runner-toolchain && cargo install cargo-chef --version 0.1.73 --locked
+#53 61.39    Compiling regex v1.11.1
+#53 61.57    Compiling dissimilar v1.0.9
+#53 61.97    Compiling humantime v2.1.0
+#53 62.49    Compiling once_cell v1.20.2
+#53 62.99    Compiling bitflags v1.3.2
+#53 63.13    Compiling termcolor v1.4.1
+#53 63.20    Compiling expect-test v1.5.1
+#53 63.90    Compiling env_logger v0.10.2
+#53 64.03    Compiling globwalk v0.8.1
+#53 65.45    Compiling cargo-manifest v0.18.1
+#53 65.59    Compiling cargo_metadata v0.15.4
+#53 68.09    Compiling clap v4.5.27
+#53 68.21    Compiling pathdiff v0.2.3
+#53 68.39    Compiling cargo-chef v0.1.73
+#53 ...
+
+#54 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#54 62.25 Progress: resolved 1323, reused 0, downloaded 436, added 430
+#54 63.25 Progress: resolved 1323, reused 0, downloaded 464, added 452
+#54 64.25 Progress: resolved 1323, reused 0, downloaded 475, added 466
+#54 65.25 Progress: resolved 1323, reused 0, downloaded 487, added 476
+#54 66.25 Progress: resolved 1323, reused 0, downloaded 501, added 491
+#54 67.26 Progress: resolved 1323, reused 0, downloaded 525, added 515
+#54 68.26 Progress: resolved 1323, reused 0, downloaded 547, added 539
+#54 69.26 Progress: resolved 1323, reused 0, downloaded 593, added 590
+#54 70.26 Progress: resolved 1323, reused 0, downloaded 673, added 673
+#54 71.26 Progress: resolved 1323, reused 0, downloaded 760, added 755
+#54 72.27 Progress: resolved 1323, reused 0, downloaded 837, added 834
+#54 73.27 Progress: resolved 1323, reused 0, downloaded 950, added 951
+#54 74.27 Progress: resolved 1323, reused 0, downloaded 1041, added 1037
+#54 75.27 Progress: resolved 1323, reused 0, downloaded 1086, added 1079
+#54 76.27 Progress: resolved 1323, reused 0, downloaded 1111, added 1101
+#54 77.27 Progress: resolved 1323, reused 0, downloaded 1134, added 1127
+#54 78.27 Progress: resolved 1323, reused 0, downloaded 1158, added 1150
+#54 79.27 Progress: resolved 1323, reused 0, downloaded 1256, added 1252
+#54 80.27 Progress: resolved 1323, reused 0, downloaded 1265, added 1261
+#54 81.27 Progress: resolved 1323, reused 0, downloaded 1278, added 1271
+#54 82.28 Progress: resolved 1323, reused 0, downloaded 1285, added 1279
+#54 83.28 Progress: resolved 1323, reused 0, downloaded 1296, added 1289
+#54 84.28 Progress: resolved 1323, reused 0, downloaded 1315, added 1313
+#54 85.28 Progress: resolved 1323, reused 0, downloaded 1315, added 1322
+#54 ...
+
+#53 [rust-chef 1/1] RUN cd /tmp/runner-toolchain && cargo install cargo-chef --version 0.1.73 --locked
+#53 86.28     Finished `release` profile [optimized] target(s) in 1m 26s
+#53 87.04   Installing /usr/local/cargo/bin/cargo-chef
+#53 87.35    Installed package `cargo-chef v0.1.73` (executable `cargo-chef`)
+#53 DONE 89.9s
+
+#54 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#54 86.34 Progress: resolved 1323, reused 0, downloaded 1316, added 1322
+#54 86.38 Progress: resolved 1323, reused 0, downloaded 1316, added 1323, done
+#54 ...
+
+#55 [runner-plan 1/4] WORKDIR /app/packages/paperclip-runner
+#55 DONE 0.9s
+
+#56 [runner-deps 1/4] WORKDIR /app/packages/paperclip-runner/runner
+#56 DONE 0.9s
+
+#57 [runner-deps 2/4] COPY packages/paperclip-runner/rust-toolchain.toml ../
+#57 DONE 0.0s
+
+#58 [runner-plan 2/4] COPY packages/paperclip-runner/rust-toolchain.toml ./
+#58 DONE 0.0s
+
+#59 [runner-plan 3/4] COPY packages/paperclip-runner/runner ./runner
+#59 DONE 0.1s
+
+#54 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#54 ...
+
+#60 [runner-plan 4/4] RUN cd runner && cargo chef prepare --recipe-path /tmp/runner-recipe.json
+#60 DONE 0.4s
+
+#61 [runner-deps 3/4] COPY --from=runner-plan /tmp/runner-recipe.json /tmp/runner-recipe.json
+#61 DONE 0.0s
+
+#62 [runner-deps 4/4] RUN cargo chef cook --release --locked --package paperclip-runner-core --bin paperclip-runnerd --recipe-path /tmp/runner-recipe.json   && find . -mindepth 1 -maxdepth 1 ! -name target -exec rm -rf {} +
+#62 0.147 warning: /app/packages/paperclip-runner/runner/crates/runner-core/Cargo.toml: unused manifest key: bin.0.plugin
+#62 0.147 warning: /app/packages/paperclip-runner/runner/crates/runner-core/Cargo.toml: unused manifest key: bin.1.plugin
+#62 0.147 warning: /app/packages/paperclip-runner/runner/crates/runner-core/Cargo.toml: unused manifest key: bin.2.plugin
+#62 0.147 warning: /app/packages/paperclip-runner/runner/crates/runner-core/Cargo.toml: unused manifest key: bin.3.plugin
+#62 0.147 warning: /app/packages/paperclip-runner/runner/crates/runner-core/Cargo.toml: unused manifest key: bin.4.plugin
+#62 0.147 warning: /app/packages/paperclip-runner/runner/crates/runner-core/Cargo.toml: unused manifest key: lib.plugin
+#62 0.186     Updating crates.io index
+#62 1.188  Downloading crates ...
+#62 1.376   Downloaded aead v0.5.2
+#62 1.379   Downloaded vsimd v0.8.0
+#62 1.384   Downloaded want v0.3.1
+#62 1.388   Downloaded writeable v0.6.4
+#62 1.399   Downloaded form_urlencoded v1.2.2
+#62 1.405   Downloaded aws-smithy-runtime-api-macros v1.1.0
+#62 1.407   Downloaded base64-simd v0.8.0
+#62 1.411   Downloaded bit-set v0.8.0
+#62 1.416   Downloaded scopeguard v1.2.0
+#62 1.420   Downloaded block-buffer v0.10.4
+#62 1.423   Downloaded cfg_aliases v0.2.2
+#62 1.427   Downloaded aws-smithy-observability v0.3.0
+#62 1.432   Downloaded futures-sink v0.3.34
+#62 1.437   Downloaded crypto-common v0.1.7
+#62 1.443   Downloaded signature v2.2.0
+#62 1.453   Downloaded dunce v1.0.5
+#62 1.455   Downloaded zerofrom v0.1.8
+#62 1.457   Downloaded strum v0.28.0
+#62 1.458   Downloaded base16ct v0.2.0
+#62 1.461   Downloaded block-buffer v0.12.1
+#62 1.463   Downloaded borrow-or-share v0.2.4
+#62 1.468   Downloaded cpufeatures v0.2.17
+#62 1.474   Downloaded cpufeatures v0.3.1
+#62 1.477   Downloaded crypto-common v0.2.2
+#62 1.480   Downloaded equivalent v1.0.2
+#62 1.482   Downloaded cfg-if v1.0.4
+#62 1.490   Downloaded errno v0.3.14
+#62 1.495   Downloaded fnv v1.0.7
+#62 1.498   Downloaded yoke-derive v0.8.2
+#62 1.503   Downloaded zerofrom-derive v0.1.7
+#62 1.507   Downloaded aws-smithy-async v1.3.0
+#62 1.516   Downloaded aws-smithy-checksums v0.65.0
+#62 1.522   Downloaded aws-smithy-eventstream v0.61.2
+#62 1.529   Downloaded aws-smithy-http v0.64.0
+#62 1.538   Downloaded aws-smithy-query v0.62.0
+#62 1.542   Downloaded cipher v0.4.4
+#62 1.547   Downloaded cmake v0.1.58
+#62 1.550   Downloaded digest v0.10.7
+#62 1.556   Downloaded displaydoc v0.2.7
+#62 1.561   Downloaded serde_urlencoded v0.7.1
+#62 1.564   Downloaded sha1 v0.10.7
+#62 1.567   Downloaded uuid-simd v0.8.0
+#62 1.570   Downloaded xmlparser v0.13.6
+#62 1.575   Downloaded zeroize v1.9.0
+#62 1.577   Downloaded zerovec-derive v0.11.6
+#62 1.582   Downloaded zmij v1.0.23
+#62 1.585   Downloaded atomic-waker v1.1.2
+#62 1.588   Downloaded autocfg v1.5.1
+#62 1.591   Downloaded aws-credential-types v1.3.0
+#62 1.594   Downloaded base64ct v1.8.3
+#62 1.599   Downloaded bit-vec v0.8.0
+#62 1.602   Downloaded bytecount v0.6.9
+#62 1.606   Downloaded bytes-utils v0.1.4
+#62 1.609   Downloaded chacha20 v0.10.2
+#62 1.614   Downloaded cmov v0.5.4
+#62 1.618   Downloaded ctr v0.9.2
+#62 1.622   Downloaded ctutils v0.4.2
+#62 1.626   Downloaded data-encoding v2.11.1
+#62 1.628   Downloaded deranged v0.5.8
+#62 1.630   Downloaded digest v0.11.3
+#62 1.635   Downloaded ecdsa v0.16.9
+#62 1.638   Downloaded either v1.18.0
+#62 1.641   Downloaded email_address v0.2.9
+#62 1.645   Downloaded fastrand v2.5.0
+#62 1.648   Downloaded ff v0.13.1
+#62 1.651   Downloaded foldhash v0.2.0
+#62 1.653   Downloaded itoa v1.0.18
+#62 1.656   Downloaded num-iter v0.1.46
+#62 1.658   Downloaded sha1 v0.11.0
+#62 1.662   Downloaded toml_datetime v0.6.11
+#62 1.663   Downloaded ahash v0.8.12
+#62 1.668   Downloaded aws-smithy-xml v0.62.0
+#62 1.672   Downloaded aws-types v1.5.0
+#62 1.675   Downloaded bitflags v2.13.1
+#62 1.684   Downloaded const-oid v0.10.2
+#62 1.688   Downloaded crc32fast v1.5.1
+#62 1.692   Downloaded elliptic-curve v0.13.8
+#62 1.700   Downloaded find-msvc-tools v0.1.11
+#62 1.703   Downloaded md-5 v0.11.0
+#62 1.707   Downloaded powerfmt v0.2.0
+#62 1.709   Downloaded rustls-native-certs v0.8.4
+#62 1.711   Downloaded sec1 v0.7.3
+#62 1.715   Downloaded sha2 v0.10.9
+#62 1.720   Downloaded slab v0.4.12
+#62 1.723   Downloaded spin v0.10.1
+#62 1.728   Downloaded stable_deref_trait v1.2.1
+#62 1.729   Downloaded strum_macros v0.28.0
+#62 1.735   Downloaded subtle v2.6.1
+#62 1.737   Downloaded time-core v0.1.9
+#62 1.740   Downloaded tinyvec_macros v0.1.1
+#62 1.740   Downloaded toml_write v0.1.2
+#62 1.742   Downloaded tower-layer v0.3.3
+#62 1.744   Downloaded tower-service v0.3.3
+#62 1.746   Downloaded yoke v0.8.3
+#62 1.750   Downloaded zerotrie v0.2.5
+#62 1.757   Downloaded allocator-api2 v0.2.21
+#62 1.762   Downloaded arc-swap v1.9.2
+#62 1.770   Downloaded aws-sigv4 v1.5.1
+#62 1.893   Downloaded aws-smithy-json v0.63.0
+#62 1.898   Downloaded aws-smithy-schema v0.2.0
+#62 1.903   Downloaded base64 v0.22.1
+#62 1.911   Downloaded bytes v1.12.1
+#62 1.918   Downloaded const-oid v0.9.6
+#62 1.921   Downloaded crypto-bigint v0.5.5
+#62 1.937   Downloaded der v0.7.10
+#62 1.948   Downloaded fluent-uri v0.4.1
+#62 1.954   Downloaded futures-task v0.3.34
+#62 1.956   Downloaded group v0.13.0
+#62 1.959   Downloaded http-body v1.1.0
+#62 1.962   Downloaded jsonschema-value v0.50.1
+#62 1.965   Downloaded parking_lot_core v0.9.12
+#62 1.969   Downloaded rustversion v1.0.23
+#62 1.976   Downloaded semver v1.0.28
+#62 1.981   Downloaded sha2 v0.11.0
+#62 1.990   Downloaded shlex v2.0.1
+#62 1.994   Downloaded smallvec v1.15.2
+#62 1.997   Downloaded spki v0.7.3
+#62 2.001   Downloaded try-lock v0.2.5
+#62 2.003   Downloaded untrusted v0.9.0
+#62 2.006   Downloaded aes v0.8.4
+#62 2.013   Downloaded aes-gcm v0.10.3
+#62 2.018   Downloaded aws-config v1.11.0
+#62 2.032   Downloaded aws-runtime v1.9.1
+#62 2.040   Downloaded aws-smithy-http-client v1.4.0
+#62 2.051   Downloaded aws-smithy-runtime v1.14.0
+#62 2.064   Downloaded aws-smithy-runtime-api v1.15.0
+#62 2.072   Downloaded aws-smithy-types v1.6.2
+#62 2.082   Downloaded cc v1.4.4
+#62 2.088   Downloaded fraction v0.16.0
+#62 2.103   Downloaded generic-array v0.14.7
+#62 2.107   Downloaded memchr v2.8.3
+#62 2.120   Downloaded proc-macro2 v1.0.107
+#62 2.126   Downloaded quote v1.0.47
+#62 2.132   Downloaded rand v0.10.2
+#62 2.139   Downloaded rand_chacha v0.9.0
+#62 2.141   Downloaded rand_core v0.6.4
+#62 2.144   Downloaded rand_core v0.9.5
+#62 2.147   Downloaded rand_core v0.10.1
+#62 2.150   Downloaded webpki-roots v1.0.9
+#62 2.155   Downloaded winnow v0.7.15
+#62 2.179   Downloaded zerovec v0.11.8
+#62 2.191   Downloaded aho-corasick v1.1.5
+#62 2.202   Downloaded aws-sdk-sts v1.113.0
+#62 2.228   Downloaded inout v0.1.4
+#62 2.230   Downloaded num-integer v0.1.47
+#62 2.233   Downloaded potential_utf v0.1.6
+#62 2.235   Downloaded rand v0.9.5
+#62 2.243   Downloaded zerocopy v0.8.56
+#62 2.286   Downloaded aws-lc-rs v1.18.1
+#62 2.308   Downloaded fancy-regex v0.19.0
+#62 2.321   Downloaded idna v1.1.0
+#62 2.327   Downloaded indexmap v2.14.1
+#62 2.335   Downloaded num-rational v0.4.2
+#62 2.337   Downloaded pkg-config v0.3.34
+#62 2.340   Downloaded regex-syntax v0.8.11
+#62 2.351   Downloaded ppv-lite86 v0.2.21
+#62 2.354   Downloaded primeorder v0.13.6
+#62 2.356   Downloaded polyval v0.6.2
+#62 2.360   Downloaded libc v0.2.189
+#62 2.502   Downloaded percent-encoding v2.3.2
+#62 2.502   Downloaded quinn-udp v0.5.15
+#62 2.504   Downloaded jobserver v0.1.35
+#62 2.509   Downloaded jsonschema-regex v0.50.1
+#62 2.510   Downloaded lru-slab v0.1.2
+#62 2.512   Downloaded num v0.4.3
+#62 2.514   Downloaded num-cmp v0.1.0
+#62 2.516   Downloaded num-conv v0.2.2
+#62 2.517   Downloaded opaque-debug v0.3.1
+#62 2.519   Downloaded openssl-probe v0.2.1
+#62 2.521   Downloaded pem-rfc7468 v0.7.0
+#62 2.525   Downloaded pkcs8 v0.10.2
+#62 2.580   Downloaded ref-cast v1.0.27
+#62 2.587   Downloaded aws-sdk-bedrockagentcore v1.65.0
+#62 2.757   Downloaded ipnet v2.12.1
+#62 2.760   Downloaded litemap v0.8.3
+#62 2.765   Downloaded lock_api v0.4.14
+#62 2.768   Downloaded lru v0.18.3
+#62 2.770   Downloaded num-complex v0.4.6
+#62 2.773   Downloaded once_cell v1.21.4
+#62 2.778   Downloaded pin-project-lite v0.2.17
+#62 2.792   Downloaded ryu v1.0.23
+#62 2.799   Downloaded tokio-rustls v0.26.4
+#62 2.806   Downloaded log v0.4.34
+#62 2.807   Downloaded num-traits v0.2.19
+#62 2.813   Downloaded p256 v0.13.2
+#62 2.820   Downloaded parking_lot v0.12.5
+#62 2.825   Downloaded quinn v0.11.11
+#62 2.831   Downloaded futures-core v0.3.34
+#62 2.833   Downloaded getrandom v0.2.17
+#62 2.839   Downloaded mio v1.2.2
+#62 2.852   Downloaded num-bigint v0.4.8
+#62 2.862   Downloaded utf8_iter v1.0.4
+#62 2.866   Downloaded http-body v0.4.6
+#62 2.870   Downloaded sync_wrapper v1.0.2
+#62 2.870   Downloaded urlencoding v2.1.3
+#62 2.872   Downloaded futures-io v0.3.34
+#62 2.873   Downloaded hex v0.4.3
+#62 2.877   Downloaded idna_adapter v1.2.2
+#62 2.879   Downloaded universal-hash v0.5.1
+#62 2.880   Downloaded outref v0.5.2
+#62 2.886   Downloaded quinn-proto v0.11.17
+#62 2.895   Downloaded synstructure v0.13.2
+#62 2.897   Downloaded version_check v0.9.5
+#62 2.900   Downloaded crc-fast v1.10.0
+#62 2.932   Downloaded fs_extra v1.3.0
+#62 2.935   Downloaded http-body-util v0.1.5
+#62 2.939   Downloaded rand_pcg v0.10.2
+#62 2.942   Downloaded serde_core v1.0.229
+#62 2.947   Downloaded tinyvec v1.12.0
+#62 2.952   Downloaded futures-channel v0.3.34
+#62 2.956   Downloaded icu_locale_core v2.3.0
+#62 2.972   Downloaded pin-utils v0.1.0
+#62 2.975   Downloaded ref-cast-impl v1.0.27
+#62 2.978   Downloaded tungstenite v0.28.0
+#62 2.983   Downloaded thiserror-impl v2.0.20
+#62 2.985   Downloaded unicode-ident v1.0.24
+#62 2.994   Downloaded utf-8 v0.7.6
+#62 2.994   Downloaded getrandom v0.3.4
+#62 3.000   Downloaded ghash v0.5.1
+#62 3.002   Downloaded httparse v1.10.1
+#62 3.006   Downloaded hybrid-array v0.4.14
+#62 3.011   Downloaded hyper-rustls v0.27.9
+#62 3.013   Downloaded serde_derive v1.0.229
+#62 3.019   Downloaded socket2 v0.6.5
+#62 3.022   Downloaded thiserror v2.0.20
+#62 3.037   Downloaded tracing-attributes v0.1.31
+#62 3.046   Downloaded unicode-general-category v1.1.0
+#62 3.046   Downloaded hmac v0.12.1
+#62 3.050   Downloaded ring v0.17.14
+#62 3.133   Downloaded jsonschema v0.50.1
+#62 3.170   Downloaded time-macros v0.2.32
+#62 3.175   Downloaded hmac v0.13.0
+#62 3.179   Downloaded tinystr v0.8.4
+#62 3.183   Downloaded serde v1.0.229
+#62 3.190   Downloaded getrandom v0.4.3
+#62 3.197   Downloaded icu_provider v2.3.1
+#62 3.202   Downloaded micromap v0.3.0
+#62 3.212   Downloaded toml_edit v0.22.27
+#62 3.221   Downloaded tower v0.5.3
+#62 3.250   Downloaded tracing-core v0.1.36
+#62 3.254   Downloaded uuid v1.26.0
+#62 3.260   Downloaded referencing v0.50.1
+#62 3.269   Downloaded url v2.5.8
+#62 3.273   Downloaded aws-sdk-s3 v1.144.0
+#62 3.486   Downloaded icu_collections v2.3.0
+#62 3.499   Downloaded icu_normalizer_data v2.3.0
+#62 3.503   Downloaded icu_properties v2.3.0
+#62 3.509   Downloaded rustc-hash v2.1.3
+#62 3.512   Downloaded tokio-util v0.7.19
+#62 3.527   Downloaded typenum v1.20.1
+#62 3.534   Downloaded http v0.2.12
+#62 3.540   Downloaded http v1.5.0
+#62 3.547   Downloaded hyper-util v0.1.20
+#62 3.562   Downloaded serde_json v1.0.151
+#62 3.574   Downloaded futures-util v0.3.34
+#62 3.601   Downloaded hashbrown v0.17.1
+#62 3.611   Downloaded tower-http v0.6.11
+#62 3.630   Downloaded h2 v0.4.19
+#62 3.643   Downloaded regex v1.13.1
+#62 3.652   Downloaded rfc6979 v0.4.0
+#62 3.654   Downloaded hyper v1.11.1
+#62 3.669   Downloaded icu_properties_data v2.3.0
+#62 3.690   Downloaded rustc_version v0.4.1
+#62 3.692   Downloaded rustls-webpki v0.103.15
+#62 3.698   Downloaded rustls-pemfile v2.2.0
+#62 3.703   Downloaded rustls-pki-types v1.15.1
+#62 3.708   Downloaded time v0.3.55
+#62 3.740   Downloaded regex-lite v0.1.9
+#62 3.745   Downloaded tracing v0.1.44
+#62 3.773   Downloaded syn v2.0.119
+#62 3.793   Downloaded reqwest v0.12.28
+#62 3.803   Downloaded syn v3.0.4
+#62 3.823   Downloaded icu_normalizer v2.3.0
+#62 3.838   Downloaded rustix v1.1.4
+#62 3.898   Downloaded rustls v0.23.45
+#62 3.919   Downloaded tokio v1.53.1
+#62 4.060   Downloaded regex-automata v0.4.18
+#62 4.085   Downloaded linux-raw-sys v0.12.1
+#62 4.220   Downloaded aws-lc-sys v0.45.0
+#62 6.787    Compiling libc v0.2.189
+#62 6.787    Compiling proc-macro2 v1.0.107
+#62 6.787    Compiling unicode-ident v1.0.24
+#62 6.791    Compiling quote v1.0.47
+#62 6.919    Compiling cfg-if v1.0.4
+#62 6.990    Compiling zeroize v1.9.0
+#62 8.905    Compiling typenum v1.20.1
+#62 9.210    Compiling version_check v0.9.5
+#62 9.503    Compiling bytes v1.12.1
+#62 9.839    Compiling itoa v1.0.18
+#62 10.17    Compiling pin-project-lite v0.2.17
+#62 10.27    Compiling generic-array v0.14.7
+#62 10.43    Compiling syn v2.0.119
+#62 10.52    Compiling futures-core v0.3.34
+#62 10.52    Compiling memchr v2.8.3
+#62 10.72    Compiling getrandom v0.2.17
+#62 10.79    Compiling subtle v2.6.1
+#62 10.99    Compiling syn v3.0.4
+#62 ...
+
+#54 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#54 92.92 .../@embedded-postgres/linux-x64 postinstall$ node scripts/hydrate-symlinks.js
+#54 93.03 .../esbuild@0.28.2/node_modules/esbuild postinstall$ node install.js
+#54 93.12 .../@embedded-postgres/linux-x64 postinstall: Done
+#54 93.17 .../esbuild@0.18.20/node_modules/esbuild postinstall$ node install.js
+#54 93.25 .../esbuild@0.28.2/node_modules/esbuild postinstall: Done
+#54 93.26 .../esbuild@0.25.12/node_modules/esbuild postinstall$ node install.js
+#54 93.37 .../esbuild@0.18.20/node_modules/esbuild postinstall: Done
+#54 93.41 .../node_modules/opencode-ai postinstall$ node ./postinstall.mjs
+#54 93.51 .../esbuild@0.25.12/node_modules/esbuild postinstall: Done
+#54 94.33 .../node_modules/protobufjs postinstall$ node scripts/postinstall
+#54 94.38 .../node_modules/cpu-features install$ node buildcheck.js > buildcheck.gypi && node-gyp rebuild
+#54 94.46 .../node_modules/protobufjs postinstall: Done
+#54 94.54 .../node_modules/cpu-features install: /app/node_modules/.pnpm/buildcheck@0.0.7/node_modules/buildcheck/lib/index.js:115
+#54 94.54 .../node_modules/cpu-features install:   throw new Error('Unable to detect compiler type');
+#54 94.54 .../node_modules/cpu-features install:   ^
+#54 94.54 .../node_modules/cpu-features install: Error: Unable to detect compiler type
+#54 94.54 .../node_modules/cpu-features install:     at BuildEnvironment.getKind (/app/node_modules/.pnpm/buildcheck@0.0.7/node_modules/buildcheck/lib/index.js:115:9)
+#54 94.54 .../node_modules/cpu-features install:     at BuildEnvironment.tryCompile (/app/node_modules/.pnpm/buildcheck@0.0.7/node_modules/buildcheck/lib/index.js:537:15)
+#54 94.54 .../node_modules/cpu-features install:     at BuildEnvironment.checkHeader (/app/node_modules/.pnpm/buildcheck@0.0.7/node_modules/buildcheck/lib/index.js:423:25)
+#54 94.54 .../node_modules/cpu-features install:     at Object.<anonymous> (/app/node_modules/.pnpm/cpu-features@0.0.10/node_modules/cpu-features/buildcheck.js:16:4)
+#54 94.54 .../node_modules/cpu-features install:     at Module._compile (node:internal/modules/cjs/loader:1929:14)
+#54 94.54 .../node_modules/cpu-features install:     at Object..js (node:internal/modules/cjs/loader:2060:10)
+#54 94.54 .../node_modules/cpu-features install:     at Module.load (node:internal/modules/cjs/loader:1651:32)
+#54 94.54 .../node_modules/cpu-features install:     at Module._load (node:internal/modules/cjs/loader:1443:12)
+#54 94.54 .../node_modules/cpu-features install:     at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+#54 94.54 .../node_modules/cpu-features install:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+#54 94.54 .../node_modules/cpu-features install: Node.js v24.22.1
+#54 94.55 .../node_modules/cpu-features install: Failed
+#54 100.9 .../node_modules/opencode-ai postinstall: Done
+#54 103.7 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install$ node install.js
+#54 ...
+
+#62 [runner-deps 4/4] RUN cargo chef cook --release --locked --package paperclip-runner-core --bin paperclip-runnerd --recipe-path /tmp/runner-recipe.json   && find . -mindepth 1 -maxdepth 1 ! -name target -exec rm -rf {} +
+#62 12.48    Compiling autocfg v1.5.1
+#62 13.05    Compiling once_cell v1.21.4
+#62 13.10    Compiling num-traits v0.2.19
+#62 13.29    Compiling rand_core v0.6.4
+#62 13.30    Compiling mio v1.2.2
+#62 13.63    Compiling socket2 v0.6.5
+#62 14.20    Compiling futures-sink v0.3.34
+#62 14.29    Compiling tokio v1.53.1
+#62 15.01    Compiling http v1.5.0
+#62 16.11    Compiling num-integer v0.1.47
+#62 16.88    Compiling crypto-common v0.1.7
+#62 17.52    Compiling slab v0.4.12
+#62 17.73    Compiling fnv v1.0.7
+#62 17.84    Compiling http-body v1.1.0
+#62 17.93    Compiling futures-io v0.3.34
+#62 18.06    Compiling futures-task v0.3.34
+#62 18.19    Compiling tracing-attributes v0.1.31
+#62 18.35    Compiling futures-util v0.3.34
+#62 ...
+
+#54 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#54 103.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info it worked if it ends with ok
+#54 103.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info using node-gyp@10.3.1
+#54 103.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info using node@24.22.1 | linux | x64
+#54 104.1 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info find Python using Python version 3.13.5 found at "/usr/bin/python3"
+#54 104.4 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp http GET https://nodejs.org/download/release/v24.22.1/node-v24.22.1-headers.tar.gz
+#54 104.5 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp http 200 https://nodejs.org/download/release/v24.22.1/node-v24.22.1-headers.tar.gz
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp http GET https://nodejs.org/download/release/v24.22.1/SHASUMS256.txt
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp http 200 https://nodejs.org/download/release/v24.22.1/SHASUMS256.txt
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn /usr/bin/python3
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args [
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/node-gyp/gyp/gyp_main.py',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args 'binding.gyp',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-f',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args 'make',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-I',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '/app/node_modules/.pnpm/ssh2@1.17.0/node_modules/ssh2/lib/protocol/crypto/build/config.gypi',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-I',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/node-gyp/addon.gypi',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-I',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '/root/.cache/node-gyp/24.22.1/include/node/common.gypi',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dlibrary=shared_library',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dvisibility=default',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dnode_root_dir=/root/.cache/node-gyp/24.22.1',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dnode_gyp_dir=/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/node-gyp',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dnode_lib_file=/root/.cache/node-gyp/24.22.1/<(target_arch)/node.lib',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dmodule_root_dir=/app/node_modules/.pnpm/ssh2@1.17.0/node_modules/ssh2/lib/protocol/crypto',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dnode_engine=v8',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '--depth=.',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '--no-parallel',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '--generator-output',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args 'build',
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Goutput_dir=.'
+#54 106.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args ]
+#54 107.3 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! build error 
+#54 107.3 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! stack Error: not found: make
+#54 107.3 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! stack at getNotFoundError (/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/which/lib/index.js:16:17)
+#54 107.3 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! stack at which (/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/which/lib/index.js:77:9)
+#54 107.3 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! stack at async doWhich (/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/node-gyp/lib/build.js:119:22)
+#54 107.3 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! stack at async loadConfigGypi (/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/node-gyp/lib/build.js:78:7)
+#54 107.3 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! stack at async build (/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/node-gyp/lib/build.js:36:3)
+#54 107.3 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! stack at async run (/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/node-gyp/bin/node-gyp.js:81:18)
+#54 107.3 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! System Linux 6.12.114-fly
+#54 107.3 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! command "/usr/local/bin/node" "/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/node-gyp/bin/node-gyp.js" "--target=v24.22.1" "--real_openssl_major=3" "rebuild"
+#54 107.3 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! cwd /app/node_modules/.pnpm/ssh2@1.17.0/node_modules/ssh2/lib/protocol/crypto
+#54 107.3 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! node -v v24.22.1
+#54 107.3 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! node-gyp -v v10.3.1
+#54 107.3 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! not ok 
+#54 107.3 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: Failed to build optional crypto binding
+#54 107.3 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: Done
+#54 107.6  WARN  Failed to create bin at /app/packages/plugins/paperclip-plugin-fake-sandbox/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+#54 107.6  WARN  Failed to create bin at /app/packages/plugins/plugin-workspace-diff/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+#54 107.6  WARN  Failed to create bin at /app/packages/plugins/plugin-llm-wiki/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+#54 107.6  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-runner-eval-session. ENOENT: no such file or directory, open '/app/packages/paperclip-runner/dist/cli/eval-session.js'
+#54 107.6  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-runner-codex-proxy. ENOENT: no such file or directory, open '/app/packages/paperclip-runner/dist/cli/codex-app-server-unix-proxy.js'
+#54 107.6  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-runner-opencode-proxy. ENOENT: no such file or directory, open '/app/packages/paperclip-runner/dist/cli/opencode-app-server-proxy.js'
+#54 107.6  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-runner-acpx-sidecar. ENOENT: no such file or directory, open '/app/packages/paperclip-runner/dist/cli/acpx-runtime-sidecar.js'
+#54 107.6  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+#54 107.6  WARN  Failed to create bin at /app/ui/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+#54 118.1 Killed
+#54 ERROR: process "/bin/sh -c pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile" did not complete successfully: exit code: 137
+
+#8 [internal] load build context
+#8 ...
+
+#62 [runner-deps 4/4] RUN cargo chef cook --release --locked --package paperclip-runner-core --bin paperclip-runnerd --recipe-path /tmp/runner-recipe.json   && find . -mindepth 1 -maxdepth 1 ! -name target -exec rm -rf {} +
+#62 CANCELED
+------
+ > [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile:
+107.6  WARN  Failed to create bin at /app/packages/plugins/paperclip-plugin-fake-sandbox/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+107.6  WARN  Failed to create bin at /app/packages/plugins/plugin-workspace-diff/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+107.6  WARN  Failed to create bin at /app/packages/plugins/plugin-llm-wiki/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+107.6  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-runner-eval-session. ENOENT: no such file or directory, open '/app/packages/paperclip-runner/dist/cli/eval-session.js'
+107.6  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-runner-codex-proxy. ENOENT: no such file or directory, open '/app/packages/paperclip-runner/dist/cli/codex-app-server-unix-proxy.js'
+107.6  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-runner-opencode-proxy. ENOENT: no such file or directory, open '/app/packages/paperclip-runner/dist/cli/opencode-app-server-proxy.js'
+107.6  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-runner-acpx-sidecar. ENOENT: no such file or directory, open '/app/packages/paperclip-runner/dist/cli/acpx-runtime-sidecar.js'
+107.6  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+107.6  WARN  Failed to create bin at /app/ui/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+118.1 Killed
+------
+Error: failed to fetch an image or build from source: error building: failed to solve: process "/bin/sh -c pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile" did not complete successfully: exit code: 137

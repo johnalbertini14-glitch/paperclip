@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import * as fs from "node:fs/promises";
 
 // Mock the adapter-utils server-utils module that execute.ts imports from.
 // We intercept runChildProcess so we can inspect its opts without spawning
@@ -31,6 +32,7 @@ vi.mock("@paperclipai/adapter-utils/server-utils", async (importOriginal) => {
 vi.mock("node:fs/promises", () => ({
   readFile: vi.fn(async () => ""),
   writeFile: vi.fn(async () => undefined),
+  mkdtemp: vi.fn(async () => "/isolated/paperclip-hermes-prompt-test"),
   mkdir: vi.fn(async () => undefined),
   rm: vi.fn(async () => undefined),
   access: vi.fn(async () => undefined),
@@ -81,6 +83,27 @@ function makeCtx(overrides: Record<string, unknown> = {}) {
 describe("hermes-local adapter onSpawn forwarding", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("uses a protected query file for an oversized prompt and removes it after execution", async () => {
+    const { ctx } = makeCtx({ promptTemplate: "synthetic-long-prompt-".repeat(6000) });
+    await execute(ctx as any);
+    const call = vi.mocked(serverUtils.runChildProcess).mock.calls.at(-1)!;
+    expect(call[2]).toContain("--query-file");
+    expect(call[2]).not.toContain("-q");
+    expect(vi.mocked(fs.writeFile)).toHaveBeenCalledWith(
+      "/isolated/paperclip-hermes-prompt-test/query.txt",
+      expect.stringContaining("synthetic-long-prompt-"),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    expect(vi.mocked(fs.rm)).toHaveBeenCalledWith("/isolated/paperclip-hermes-prompt-test", { recursive: true, force: true });
+  });
+
+  it("removes the protected query file if the child process rejects", async () => {
+    vi.mocked(serverUtils.runChildProcess).mockRejectedValueOnce(new Error("synthetic failure"));
+    const { ctx } = makeCtx({ promptTemplate: "synthetic-long-prompt-".repeat(6000) });
+    await expect(execute(ctx as any)).rejects.toThrow("synthetic failure");
+    expect(vi.mocked(fs.rm)).toHaveBeenCalledWith("/isolated/paperclip-hermes-prompt-test", { recursive: true, force: true });
   });
 
   it("forwards ctx.onSpawn to runChildProcess", async () => {

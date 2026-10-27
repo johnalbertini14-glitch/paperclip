@@ -9629,6 +9629,7 @@ export function issueRoutes(
           return { issue: lockedIssue, recoveryAction, chatRetry: null, workspaceRepairOnly: true };
         }
 
+        let boardHandback: { actionId: string; currentOwnerAgentId: string; sourceAgentId: string } | undefined;
         let activeRecoveryAction = await recoveryActionsSvc.getActiveForIssue(
           lockedIssue.companyId,
           lockedIssue.id,
@@ -9671,6 +9672,11 @@ export function issueRoutes(
                   "Verified outcomes must restore this source recovery without replacing another active recovery action.",
                 );
               }
+              boardHandback = lockedIssue.assigneeAgentId && settled.returnOwnerAgentId &&
+                settled.returnOwnerAgentId !== lockedIssue.assigneeAgentId
+                ? { actionId: settled.id, currentOwnerAgentId: lockedIssue.assigneeAgentId,
+                    sourceAgentId: settled.returnOwnerAgentId }
+                : undefined;
               const [reopened] = await tx
                 .update(issueRecoveryActions)
                 .set({ status: "active", outcome: null, resolvedAt: null })
@@ -9826,6 +9832,7 @@ export function issueRoutes(
               activeRecoveryAction.evidence.runId ??
               activeRecoveryAction.evidence.sourceRunId,
             decision: executionReconciliation,
+            ...(boardHandback ? { boardHandback } : {}),
           });
         } else if (executionReconciliation) {
           throw conflict(
@@ -9889,6 +9896,7 @@ export function issueRoutes(
             chatRetry
               ? { kind: "chat_failed_run_retry", actionId: chatRetry.actionId }
               : undefined,
+            boardHandback ? { boardHandback } : undefined,
           );
         }
         let issue = lockedIssue;

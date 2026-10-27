@@ -1746,7 +1746,19 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
     return cancelled;
   }
 
-  async function resumeQueuedRuns() {
+  // Coalesce only overlapping sweeps. Release on success or failure so the
+  // following scheduler tick can retry instead of inheriting a stale promise.
+  let resumeQueuedRunsInFlight: Promise<void> | null = null;
+  function resumeQueuedRuns() {
+    if (resumeQueuedRunsInFlight) return resumeQueuedRunsInFlight;
+    const sweep = resumeQueuedRunsOnce().finally(() => {
+      if (resumeQueuedRunsInFlight === sweep) resumeQueuedRunsInFlight = null;
+    });
+    resumeQueuedRunsInFlight = sweep;
+    return sweep;
+  }
+
+  async function resumeQueuedRunsOnce() {
     if ((await getSchedulingSuppression()).suppressed) return;
     await resumeExecutionWaitComments();
     const cutoff = await getWorktreeExecutionCutoff();

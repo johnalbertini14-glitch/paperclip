@@ -2,8 +2,8 @@
 FROM node:24-trixie-slim AS base
 ARG USER_UID=1000
 ARG USER_GID=1000
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates gosu curl gh git wget ripgrep python3 tini \
+RUN apt-get update -o Acquire::Retries=3 \
+  && apt-get install -o Acquire::Retries=3 -y --no-install-recommends ca-certificates gosu curl gh git wget ripgrep python3 tini \
   && rm -rf /var/lib/apt/lists/* \
   && corepack enable
 
@@ -51,7 +51,8 @@ COPY scripts/link-plugin-dev-sdk.mjs scripts/
 
 # CI owns repository lock updates. Resolve manifest changes in the image's
 # private build tree, then install from that exact generated lock.
-RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+ENV NODE_OPTIONS=--max-old-space-size=3072
+RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile --child-concurrency=2 --network-concurrency=4 && pnpm install --frozen-lockfile --child-concurrency=2 --network-concurrency=4
 
 FROM base AS rust-toolchain
 WORKDIR /app

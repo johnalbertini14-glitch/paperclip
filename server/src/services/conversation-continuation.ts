@@ -1,6 +1,7 @@
 import { hasRequiredWorkspaceRecovery } from "./workspace-restore-recovery-state.js";
 import { and, desc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { environmentLeases, heartbeatRunEvents, heartbeatRuns, issueRecoveryActions, type Db } from "@paperclipai/db";
+import { canonicalExecutionUuid } from "./execution-identity.js";
 import { readProcessStartedAt } from "./hot-restart.js";
 import { hasRemoteTerminationReceipt } from "./remote-execution-termination.js";
 
@@ -31,11 +32,9 @@ function conversationRunPredicate() {
   return or(
     inArray(sql`${heartbeatRuns.runnerProfileJson}->'adapterDispatch'->>'adapterType'`, [...CONVERSATION_ADAPTER_TYPES]),
     sql`${heartbeatRuns.resultJson}->>'conversationContinuation' = ${CONVERSATION_CONTINUATION_POLICY}`,
-    sql`exists (
-      select 1 from ${heartbeatRunEvents}
-      where ${heartbeatRunEvents.companyId} = ${heartbeatRuns.companyId}
-        and ${heartbeatRunEvents.runId} = ${heartbeatRuns.id}
-        and ${heartbeatRunEvents.eventType} = 'adapter.invoke'
+    sql`(${heartbeatRuns.companyId}, ${heartbeatRuns.id}) in (
+      select ${heartbeatRunEvents.companyId}, ${heartbeatRunEvents.runId} from ${heartbeatRunEvents}
+      where ${heartbeatRunEvents.eventType} = 'adapter.invoke'
         and ${inArray(sql`${heartbeatRunEvents.payload}->>'adapterType'`, [...CONVERSATION_ADAPTER_TYPES])}
     )`,
   );
@@ -70,7 +69,7 @@ export function conversationRecoveryActionPredicate() {
     sql`exists (
       select 1 from ${heartbeatRuns}
       where ${heartbeatRuns.companyId} = ${issueRecoveryActions.companyId}
-        and ${heartbeatRuns.id}::text = ${issueRecoveryActions.evidence}->>'runId'
+        and ${heartbeatRuns.id} = ${canonicalExecutionUuid(sql`${issueRecoveryActions.evidence}->>'runId'`)}
         and coalesce(${heartbeatRuns.nativeIssueId}::text, ${heartbeatRuns.contextSnapshot}->>'issueId') = ${issueRecoveryActions.sourceIssueId}::text
         and ${heartbeatRuns.runtimeMode} = 'legacy'
         and coalesce(${heartbeatRuns.resultJson}->>'workspaceRestoreFailure', '') <> 'restore_unsafe_archive'

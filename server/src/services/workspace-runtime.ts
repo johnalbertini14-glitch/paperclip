@@ -4351,11 +4351,14 @@ export async function cleanupExecutionWorkspaceArtifacts(input: {
         });
       }
     }
+  } else if (input.workspace.providerType === "local_fs" && workspacePath && !createdByRuntime) {
+    warnings.push(`Kept directory "${workspacePath}" because the runtime did not create it. Archiving this session leaves the directory in place.`);
   }
 
   const cleaned =
     !workspacePath ||
-    !(await directoryExists(workspacePath));
+    !(await directoryExists(workspacePath)) ||
+    (input.workspace.providerType === "local_fs" && !createdByRuntime);
 
   return {
     cleanedPath: workspacePath,

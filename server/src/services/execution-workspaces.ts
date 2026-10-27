@@ -404,6 +404,13 @@ async function runGit(args: string[], cwd: string) {
   return await execFileAsync("git", ["-C", cwd, ...args], { cwd });
 }
 
+function isNotAGitRepositoryError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return /not a git repository/i.test(String(error));
+  const candidate = error as { stderr?: unknown; stdout?: unknown; message?: unknown };
+  return [candidate.stderr, candidate.stdout, candidate.message]
+    .some((part) => typeof part === "string" && /not a git repository/i.test(part));
+}
+
 async function runExpensiveGitStatus(input: {
   args: readonly string[];
   cwd: string;
@@ -841,6 +848,12 @@ async function inspectGitCloseReadiness(workspace: ExecutionWorkspace): Promise<
   try {
     repoRoot = (await runGit(["rev-parse", "--show-toplevel"], workspacePath)).stdout.trim() || null;
   } catch (error) {
+    // Shared project infrastructure is a record-only close, not a Git worktree.
+    // Do not treat other Git errors or runtime-owned worktrees as safe.
+    if (workspace.mode === "shared_workspace" && workspace.providerType !== "git_worktree" && isNotAGitRepositoryError(error)) {
+      warnings.push(`Workspace path "${workspacePath}" is not a Git repository; leaving project infrastructure in place.`);
+      return { git: null, warnings, statusInspectionSucceeded: true };
+    }
     warnings.push(
       `Could not inspect git status for "${workspacePath}": ${error instanceof Error ? error.message : String(error)}`,
     );

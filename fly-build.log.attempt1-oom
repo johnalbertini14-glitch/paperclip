@@ -1,0 +1,1425 @@
+==> Verifying app config
+Validating fly.toml
+[32m✓[0m Configuration is valid
+--> Verified app config
+==> Building image
+
+WARN Build context is 162 MB across 12,027 files. It is uploaded to the builder on
+     every deploy, and a large context can make builds noticeably slower.
+     Largest paths in the context:
+       packages/  50 MB
+       server/    45 MB
+       ui/        27 MB
+       doc/       14 MB
+       docs/      9.6 MB
+     If some of these don't need to be in the image, add them to .dockerignore:
+     https://docs.docker.com/build/concepts/context/#dockerignore-files
+     (disable with --build-context-warn-size 0)
+Waiting for depot builder...
+
+==> Building image with Depot
+--> build:  (​)
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 18.80kB 0.1s done
+#1 DONE 0.1s
+
+#2 resolve image config for docker-image://docker.io/docker/dockerfile:1.20
+#2 DONE 0.7s
+
+#3 docker-image://docker.io/docker/dockerfile:1.20@sha256:26147acbda4f14c5add9946e2fd2ed543fc402884fd75146bd342a7f6271dc1d
+#3 resolve docker.io/docker/dockerfile:1.20@sha256:26147acbda4f14c5add9946e2fd2ed543fc402884fd75146bd342a7f6271dc1d done
+#3 DONE 0.0s
+
+#3 docker-image://docker.io/docker/dockerfile:1.20@sha256:26147acbda4f14c5add9946e2fd2ed543fc402884fd75146bd342a7f6271dc1d
+#3 sha256:47ba10c155be2908054a8de6c51b6fe308ed7156abb982ab3ce20d2be5813241 4.19MB / 13.72MB 0.2s
+#3 sha256:47ba10c155be2908054a8de6c51b6fe308ed7156abb982ab3ce20d2be5813241 13.72MB / 13.72MB 0.3s done
+#3 extracting sha256:47ba10c155be2908054a8de6c51b6fe308ed7156abb982ab3ce20d2be5813241 0.1s done
+#3 DONE 0.4s
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 18.80kB 0.1s done
+#1 DONE 0.1s
+
+#4 [internal] load build definition from Dockerfile
+#4 Deduplicating step ID [internal] load build definition from Dockerfile, another build is calculating it done
+#4 DONE 0.0s
+
+#5 [internal] load metadata for docker.io/library/node:24-trixie-slim
+#5 DONE 0.7s
+
+#6 [internal] load .dockerignore
+#6 transferring context: 2.77kB 0.1s done
+#6 DONE 0.1s
+
+#7 [base 1/3] FROM docker.io/library/node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
+#7 resolve docker.io/library/node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea done
+#7 sha256:622d521406a07428db0f079a21c4223903af43b954b03e7eda685c780b90f15b 1.72MB / 1.72MB 0.1s done
+#7 sha256:bc8b3f2c49238d1b7ab1afb031e5b900ecd9ec4cd92b7375d8bf83976da8d8c9 450B / 450B 0.1s done
+#7 sha256:244264efccec16bd5b6d8b325ace069525527dc16b706b4d72df8af533971ebf 3.31kB / 3.31kB 0.1s done
+#7 extracting sha256:244264efccec16bd5b6d8b325ace069525527dc16b706b4d72df8af533971ebf done
+#7 sha256:1fea3edc99a2db1c70c69f4b0367a5a89e75888007ca0f9d2f49395645645b1a 2.10MB / 51.12MB 0.2s
+#7 sha256:1fea3edc99a2db1c70c69f4b0367a5a89e75888007ca0f9d2f49395645645b1a 17.83MB / 51.12MB 0.3s
+#7 sha256:1fea3edc99a2db1c70c69f4b0367a5a89e75888007ca0f9d2f49395645645b1a 31.46MB / 51.12MB 0.5s
+#7 sha256:1fea3edc99a2db1c70c69f4b0367a5a89e75888007ca0f9d2f49395645645b1a 51.12MB / 51.12MB 0.6s done
+#7 extracting sha256:1fea3edc99a2db1c70c69f4b0367a5a89e75888007ca0f9d2f49395645645b1a
+#7 extracting sha256:1fea3edc99a2db1c70c69f4b0367a5a89e75888007ca0f9d2f49395645645b1a 1.9s done
+#7 DONE 2.6s
+
+#8 [internal] load build context
+#8 ...
+
+#7 [base 1/3] FROM docker.io/library/node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
+#7 extracting sha256:622d521406a07428db0f079a21c4223903af43b954b03e7eda685c780b90f15b 0.1s done
+#7 DONE 2.7s
+
+#8 [internal] load build context
+#8 ...
+
+#7 [base 1/3] FROM docker.io/library/node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
+#7 extracting sha256:bc8b3f2c49238d1b7ab1afb031e5b900ecd9ec4cd92b7375d8bf83976da8d8c9 done
+#7 DONE 2.7s
+
+#8 [internal] load build context
+#8 transferring context: 160.93MB 5.0s
+#8 transferring context: 162.64MB 5.1s done
+#8 ...
+
+#9 [base 2/3] RUN apt-get update   && apt-get install -y --no-install-recommends ca-certificates gosu curl gh git wget ripgrep python3 tini   && rm -rf /var/lib/apt/lists/*   && corepack enable
+#9 0.356 Get:1 http://deb.debian.org/debian trixie InRelease [140 kB]
+#9 0.390 Get:2 http://deb.debian.org/debian trixie-updates InRelease [47.3 kB]
+#9 0.391 Get:3 http://deb.debian.org/debian-security trixie-security InRelease [43.4 kB]
+#9 0.441 Get:4 http://deb.debian.org/debian trixie/main amd64 Packages [9678 kB]
+#9 0.544 Get:5 http://deb.debian.org/debian trixie-updates/main amd64 Packages [720 B]
+#9 0.546 Get:6 http://deb.debian.org/debian-security trixie-security/main amd64 Packages [270 kB]
+#9 1.355 Fetched 10.2 MB in 1s (8688 kB/s)
+#9 1.355 Reading package lists...
+#9 2.129 Reading package lists...
+#9 2.864 Building dependency tree...
+#9 3.040 Reading state information...
+#9 3.261 The following additional packages will be installed:
+#9 3.262   git-man libbrotli1 libcom-err2 libcurl3t64-gnutls libcurl4t64 liberror-perl
+#9 3.263   libexpat1 libffi8 libgdbm-compat4t64 libgdbm6t64 libgnutls30t64
+#9 3.263   libgssapi-krb5-2 libidn2-0 libk5crypto3 libkeyutils1 libkrb5-3
+#9 3.263   libkrb5support0 libldap2 libncursesw6 libnghttp2-14 libnghttp3-9
+#9 3.263   libngtcp2-16 libngtcp2-crypto-gnutls8 libp11-kit0 libperl5.40 libpsl5t64
+#9 3.263   libpython3-stdlib libpython3.13-minimal libpython3.13-stdlib libreadline8t64
+#9 3.263   librtmp1 libsasl2-2 libsasl2-modules-db libssh2-1t64 libtasn1-6
+#9 3.263   libunistring5 media-types netbase openssl perl perl-modules-5.40
+#9 3.263   python3-minimal python3.13 python3.13-minimal readline-common
+#9 3.265 Suggested packages:
+#9 3.265   gettext-base git-doc git-email git-gui gitk gitweb git-cvs git-mediawiki
+#9 3.265   git-svn gdbm-l10n gnutls-bin krb5-doc krb5-user sensible-utils perl-doc
+#9 3.265   libterm-readline-gnu-perl | libterm-readline-perl-perl make
+#9 3.265   libtap-harness-archive-perl python3-doc python3-tk python3-venv
+#9 3.265   python3.13-venv python3.13-doc binutils binfmt-support readline-doc
+#9 3.265 Recommended packages:
+#9 3.265   bash-completion patch less ssh-client krb5-locales libldap-common libgpm2
+#9 3.265   publicsuffix libsasl2-modules
+#9 3.600 The following NEW packages will be installed:
+#9 3.600   ca-certificates curl gh git git-man gosu libbrotli1 libcom-err2
+#9 3.601   libcurl3t64-gnutls libcurl4t64 liberror-perl libexpat1 libffi8
+#9 3.601   libgdbm-compat4t64 libgdbm6t64 libgnutls30t64 libgssapi-krb5-2 libidn2-0
+#9 3.601   libk5crypto3 libkeyutils1 libkrb5-3 libkrb5support0 libldap2 libncursesw6
+#9 3.601   libnghttp2-14 libnghttp3-9 libngtcp2-16 libngtcp2-crypto-gnutls8 libp11-kit0
+#9 3.601   libperl5.40 libpsl5t64 libpython3-stdlib libpython3.13-minimal
+#9 3.601   libpython3.13-stdlib libreadline8t64 librtmp1 libsasl2-2 libsasl2-modules-db
+#9 3.601   libssh2-1t64 libtasn1-6 libunistring5 media-types netbase openssl perl
+#9 3.601   perl-modules-5.40 python3 python3-minimal python3.13 python3.13-minimal
+#9 3.601   readline-common ripgrep tini wget
+#9 3.637 0 upgraded, 54 newly installed, 0 to remove and 1 not upgraded.
+#9 3.637 Need to get 43.6 MB of archives.
+#9 3.637 After this operation, 196 MB of additional disk space will be used.
+#9 3.637 Get:1 http://deb.debian.org/debian-security trixie-security/main amd64 libexpat1 amd64 2.9.0-1~deb13u1 [126 kB]
+#9 3.643 Get:2 http://deb.debian.org/debian trixie/main amd64 libpython3.13-minimal amd64 3.13.5-2+deb13u5 [863 kB]
+#9 3.649 Get:3 http://deb.debian.org/debian trixie/main amd64 python3.13-minimal amd64 3.13.5-2+deb13u5 [2225 kB]
+#9 3.658 Get:4 http://deb.debian.org/debian trixie/main amd64 python3-minimal amd64 3.13.5-1 [27.2 kB]
+#9 3.658 Get:5 http://deb.debian.org/debian trixie/main amd64 media-types all 13.0.0 [29.3 kB]
+#9 3.659 Get:6 http://deb.debian.org/debian trixie/main amd64 netbase all 6.5 [12.4 kB]
+#9 3.659 Get:7 http://deb.debian.org/debian trixie/main amd64 libffi8 amd64 3.4.8-2 [24.1 kB]
+#9 3.660 Get:8 http://deb.debian.org/debian trixie/main amd64 libncursesw6 amd64 6.5+20250216-2 [135 kB]
+#9 3.660 Get:9 http://deb.debian.org/debian trixie/main amd64 readline-common all 8.2-6 [69.4 kB]
+#9 3.661 Get:10 http://deb.debian.org/debian trixie/main amd64 libreadline8t64 amd64 8.2-6 [169 kB]
+#9 3.662 Get:11 http://deb.debian.org/debian trixie/main amd64 libpython3.13-stdlib amd64 3.13.5-2+deb13u5 [1959 kB]
+#9 3.671 Get:12 http://deb.debian.org/debian trixie/main amd64 python3.13 amd64 3.13.5-2+deb13u5 [757 kB]
+#9 3.674 Get:13 http://deb.debian.org/debian trixie/main amd64 libpython3-stdlib amd64 3.13.5-1 [10.2 kB]
+#9 3.675 Get:14 http://deb.debian.org/debian trixie/main amd64 python3 amd64 3.13.5-1 [28.2 kB]
+#9 3.679 Get:15 http://deb.debian.org/debian-security trixie-security/main amd64 openssl amd64 3.5.7-1~deb13u3 [1508 kB]
+#9 3.679 Get:16 http://deb.debian.org/debian-security trixie-security/main amd64 ca-certificates all 20250419+deb13u1 [161 kB]
+#9 3.680 Get:17 http://deb.debian.org/debian trixie/main amd64 perl-modules-5.40 all 5.40.1-6+deb13u1 [3014 kB]
+#9 3.694 Get:18 http://deb.debian.org/debian trixie/main amd64 libgdbm6t64 amd64 1.24-2 [75.2 kB]
+#9 3.699 Get:19 http://deb.debian.org/debian trixie/main amd64 libgdbm-compat4t64 amd64 1.24-2 [50.3 kB]
+#9 3.699 Get:20 http://deb.debian.org/debian trixie/main amd64 libperl5.40 amd64 5.40.1-6+deb13u1 [4326 kB]
+#9 3.719 Get:21 http://deb.debian.org/debian trixie/main amd64 perl amd64 5.40.1-6+deb13u1 [268 kB]
+#9 3.720 Get:22 http://deb.debian.org/debian trixie/main amd64 libunistring5 amd64 1.3-2 [477 kB]
+#9 3.723 Get:23 http://deb.debian.org/debian trixie/main amd64 libidn2-0 amd64 2.3.8-2 [109 kB]
+#9 3.724 Get:24 http://deb.debian.org/debian trixie/main amd64 libp11-kit0 amd64 0.25.5-3 [425 kB]
+#9 3.726 Get:25 http://deb.debian.org/debian trixie/main amd64 libtasn1-6 amd64 4.20.0-2+deb13u1 [50.1 kB]
+#9 3.727 Get:26 http://deb.debian.org/debian trixie/main amd64 libgnutls30t64 amd64 3.8.9-3+deb13u4 [1469 kB]
+#9 3.734 Get:27 http://deb.debian.org/debian trixie/main amd64 libpsl5t64 amd64 0.21.2-1.1+b1 [57.2 kB]
+#9 3.735 Get:28 http://deb.debian.org/debian trixie/main amd64 wget amd64 1.25.0-2 [984 kB]
+#9 3.739 Get:29 http://deb.debian.org/debian-security trixie-security/main amd64 libbrotli1 amd64 1.1.0-2+deb13u1 [304 kB]
+#9 3.741 Get:30 http://deb.debian.org/debian trixie/main amd64 libkrb5support0 amd64 1.21.3-5+deb13u1 [33.1 kB]
+#9 3.743 Get:31 http://deb.debian.org/debian trixie/main amd64 libcom-err2 amd64 1.47.2-3+b12 [25.0 kB]
+#9 3.743 Get:32 http://deb.debian.org/debian trixie/main amd64 libk5crypto3 amd64 1.21.3-5+deb13u1 [81.2 kB]
+#9 3.743 Get:33 http://deb.debian.org/debian trixie/main amd64 libkeyutils1 amd64 1.6.3-6 [9456 B]
+#9 3.744 Get:34 http://deb.debian.org/debian trixie/main amd64 libkrb5-3 amd64 1.21.3-5+deb13u1 [326 kB]
+#9 3.745 Get:35 http://deb.debian.org/debian trixie/main amd64 libgssapi-krb5-2 amd64 1.21.3-5+deb13u1 [138 kB]
+#9 3.746 Get:36 http://deb.debian.org/debian trixie/main amd64 libsasl2-modules-db amd64 2.1.28+dfsg1-9 [19.8 kB]
+#9 3.746 Get:37 http://deb.debian.org/debian trixie/main amd64 libsasl2-2 amd64 2.1.28+dfsg1-9 [57.5 kB]
+#9 3.747 Get:38 http://deb.debian.org/debian trixie/main amd64 libldap2 amd64 2.6.10+dfsg-1 [194 kB]
+#9 3.748 Get:39 http://deb.debian.org/debian trixie/main amd64 libnghttp2-14 amd64 1.64.0-1.1+deb13u1 [76.2 kB]
+#9 3.748 Get:40 http://deb.debian.org/debian trixie/main amd64 libnghttp3-9 amd64 1.8.0-1 [67.7 kB]
+#9 3.749 Get:41 http://deb.debian.org/debian trixie/main amd64 librtmp1 amd64 2.4+20151223.gitfa8646d.1-2+b5 [58.8 kB]
+#9 3.750 Get:42 http://deb.debian.org/debian trixie/main amd64 libssh2-1t64 amd64 1.11.1-1+deb13u2 [245 kB]
+#9 3.751 Get:43 http://deb.debian.org/debian-security trixie-security/main amd64 libcurl4t64 amd64 8.14.1-2+deb13u7 [392 kB]
+#9 3.753 Get:44 http://deb.debian.org/debian-security trixie-security/main amd64 curl amd64 8.14.1-2+deb13u7 [270 kB]
+#9 3.754 Get:45 http://deb.debian.org/debian trixie/main amd64 gh amd64 2.46.0-3 [7616 kB]
+#9 3.794 Get:46 http://deb.debian.org/debian trixie/main amd64 libngtcp2-16 amd64 1.11.0-1+deb13u1 [132 kB]
+#9 3.795 Get:47 http://deb.debian.org/debian trixie/main amd64 libngtcp2-crypto-gnutls8 amd64 1.11.0-1+deb13u1 [29.5 kB]
+#9 3.795 Get:48 http://deb.debian.org/debian-security trixie-security/main amd64 libcurl3t64-gnutls amd64 8.14.1-2+deb13u7 [385 kB]
+#9 3.797 Get:49 http://deb.debian.org/debian trixie/main amd64 liberror-perl all 0.17030-1 [26.9 kB]
+#9 3.797 Get:50 http://deb.debian.org/debian trixie/main amd64 git-man all 1:2.47.3-0+deb13u1 [2205 kB]
+#9 3.810 Get:51 http://deb.debian.org/debian trixie/main amd64 git amd64 1:2.47.3-0+deb13u1 [8862 kB]
+#9 3.855 Get:52 http://deb.debian.org/debian trixie/main amd64 gosu amd64 1.17-3+b4 [940 kB]
+#9 3.860 Get:53 http://deb.debian.org/debian trixie/main amd64 ripgrep amd64 14.1.1-1+b4 [1434 kB]
+#9 3.867 Get:54 http://deb.debian.org/debian trixie/main amd64 tini amd64 0.19.0-3+b8 [280 kB]
+#9 4.082 debconf: unable to initialize frontend: Dialog
+#9 4.082 debconf: (TERM is not set, so the dialog frontend is not usable.)
+#9 4.082 debconf: falling back to frontend: Readline
+#9 4.083 debconf: unable to initialize frontend: Readline
+#9 4.083 debconf: (Can't locate Term/ReadLine.pm in @INC (you may need to install the Term::ReadLine module) (@INC entries checked: /etc/perl /usr/local/lib/x86_64-linux-gnu/perl/5.40.1 /usr/local/share/perl/5.40.1 /usr/lib/x86_64-linux-gnu/perl5/5.40 /usr/share/perl5 /usr/lib/x86_64-linux-gnu/perl-base /usr/lib/x86_64-linux-gnu/perl/5.40 /usr/share/perl/5.40 /usr/local/lib/site_perl) at /usr/share/perl5/Debconf/FrontEnd/Readline.pm line 8, <STDIN> line 54.)
+#9 4.083 debconf: falling back to frontend: Teletype
+#9 4.089 debconf: unable to initialize frontend: Teletype
+#9 4.089 debconf: (This frontend requires a controlling tty.)
+#9 4.089 debconf: falling back to frontend: Noninteractive
+#9 5.617 Preconfiguring packages ...
+#9 5.691 Fetched 43.6 MB in 0s (175 MB/s)
+#9 5.713 Selecting previously unselected package libexpat1:amd64.
+#9 5.713 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 5036 files and directories currently installed.)
+#9 5.736 Preparing to unpack .../libexpat1_2.9.0-1~deb13u1_amd64.deb ...
+#9 5.738 Unpacking libexpat1:amd64 (2.9.0-1~deb13u1) ...
+#9 5.762 Selecting previously unselected package libpython3.13-minimal:amd64.
+#9 5.763 Preparing to unpack .../libpython3.13-minimal_3.13.5-2+deb13u5_amd64.deb ...
+#9 5.765 Unpacking libpython3.13-minimal:amd64 (3.13.5-2+deb13u5) ...
+#9 5.849 Selecting previously unselected package python3.13-minimal.
+#9 5.851 Preparing to unpack .../python3.13-minimal_3.13.5-2+deb13u5_amd64.deb ...
+#9 5.858 Unpacking python3.13-minimal (3.13.5-2+deb13u5) ...
+#9 5.984 Setting up libpython3.13-minimal:amd64 (3.13.5-2+deb13u5) ...
+#9 5.989 Setting up libexpat1:amd64 (2.9.0-1~deb13u1) ...
+#9 5.991 Setting up python3.13-minimal (3.13.5-2+deb13u5) ...
+#9 6.784 Selecting previously unselected package python3-minimal.
+#9 6.784 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 5370 files and directories currently installed.)
+#9 6.791 Preparing to unpack .../0-python3-minimal_3.13.5-1_amd64.deb ...
+#9 6.792 Unpacking python3-minimal (3.13.5-1) ...
+#9 6.811 Selecting previously unselected package media-types.
+#9 6.812 Preparing to unpack .../1-media-types_13.0.0_all.deb ...
+#9 6.813 Unpacking media-types (13.0.0) ...
+#9 6.832 Selecting previously unselected package netbase.
+#9 6.833 Preparing to unpack .../2-netbase_6.5_all.deb ...
+#9 6.834 Unpacking netbase (6.5) ...
+#9 6.850 Selecting previously unselected package libffi8:amd64.
+#9 6.851 Preparing to unpack .../3-libffi8_3.4.8-2_amd64.deb ...
+#9 6.852 Unpacking libffi8:amd64 (3.4.8-2) ...
+#9 6.869 Selecting previously unselected package libncursesw6:amd64.
+#9 6.871 Preparing to unpack .../4-libncursesw6_6.5+20250216-2_amd64.deb ...
+#9 6.872 Unpacking libncursesw6:amd64 (6.5+20250216-2) ...
+#9 6.894 Selecting previously unselected package readline-common.
+#9 6.895 Preparing to unpack .../5-readline-common_8.2-6_all.deb ...
+#9 6.896 Unpacking readline-common (8.2-6) ...
+#9 6.914 Selecting previously unselected package libreadline8t64:amd64.
+#9 6.916 Preparing to unpack .../6-libreadline8t64_8.2-6_amd64.deb ...
+#9 6.921 Adding 'diversion of /lib/x86_64-linux-gnu/libhistory.so.8 to /lib/x86_64-linux-gnu/libhistory.so.8.usr-is-merged by libreadline8t64'
+#9 6.926 Adding 'diversion of /lib/x86_64-linux-gnu/libhistory.so.8.2 to /lib/x86_64-linux-gnu/libhistory.so.8.2.usr-is-merged by libreadline8t64'
+#9 6.931 Adding 'diversion of /lib/x86_64-linux-gnu/libreadline.so.8 to /lib/x86_64-linux-gnu/libreadline.so.8.usr-is-merged by libreadline8t64'
+#9 6.935 Adding 'diversion of /lib/x86_64-linux-gnu/libreadline.so.8.2 to /lib/x86_64-linux-gnu/libreadline.so.8.2.usr-is-merged by libreadline8t64'
+#9 6.937 Unpacking libreadline8t64:amd64 (8.2-6) ...
+#9 6.960 Selecting previously unselected package libpython3.13-stdlib:amd64.
+#9 6.961 Preparing to unpack .../7-libpython3.13-stdlib_3.13.5-2+deb13u5_amd64.deb ...
+#9 6.962 Unpacking libpython3.13-stdlib:amd64 (3.13.5-2+deb13u5) ...
+#9 8.150 Selecting previously unselected package python3.13.
+#9 8.152 Preparing to unpack .../8-python3.13_3.13.5-2+deb13u5_amd64.deb ...
+#9 8.152 Unpacking python3.13 (3.13.5-2+deb13u5) ...
+#9 8.173 Selecting previously unselected package libpython3-stdlib:amd64.
+#9 8.175 Preparing to unpack .../9-libpython3-stdlib_3.13.5-1_amd64.deb ...
+#9 8.176 Unpacking libpython3-stdlib:amd64 (3.13.5-1) ...
+#9 8.195 Setting up python3-minimal (3.13.5-1) ...
+#9 8.347 Selecting previously unselected package python3.
+#9 8.347 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 5878 files and directories currently installed.)
+#9 8.353 Preparing to unpack .../00-python3_3.13.5-1_amd64.deb ...
+#9 8.358 Unpacking python3 (3.13.5-1) ...
+#9 8.377 Selecting previously unselected package openssl.
+#9 8.378 Preparing to unpack .../01-openssl_3.5.7-1~deb13u3_amd64.deb ...
+#9 8.379 Unpacking openssl (3.5.7-1~deb13u3) ...
+#9 8.446 Selecting previously unselected package ca-certificates.
+#9 8.448 Preparing to unpack .../02-ca-certificates_20250419+deb13u1_all.deb ...
+#9 8.449 Unpacking ca-certificates (20250419+deb13u1) ...
+#9 8.496 Selecting previously unselected package perl-modules-5.40.
+#9 8.498 Preparing to unpack .../03-perl-modules-5.40_5.40.1-6+deb13u1_all.deb ...
+#9 8.498 Unpacking perl-modules-5.40 (5.40.1-6+deb13u1) ...
+#9 8.833 Selecting previously unselected package libgdbm6t64:amd64.
+#9 8.836 Preparing to unpack .../04-libgdbm6t64_1.24-2_amd64.deb ...
+#9 8.837 Unpacking libgdbm6t64:amd64 (1.24-2) ...
+#9 8.855 Selecting previously unselected package libgdbm-compat4t64:amd64.
+#9 8.857 Preparing to unpack .../05-libgdbm-compat4t64_1.24-2_amd64.deb ...
+#9 8.858 Unpacking libgdbm-compat4t64:amd64 (1.24-2) ...
+#9 8.877 Selecting previously unselected package libperl5.40:amd64.
+#9 8.879 Preparing to unpack .../06-libperl5.40_5.40.1-6+deb13u1_amd64.deb ...
+#9 8.880 Unpacking libperl5.40:amd64 (5.40.1-6+deb13u1) ...
+#9 9.141 Selecting previously unselected package perl.
+#9 9.143 Preparing to unpack .../07-perl_5.40.1-6+deb13u1_amd64.deb ...
+#9 9.144 Unpacking perl (5.40.1-6+deb13u1) ...
+#9 9.173 Selecting previously unselected package libunistring5:amd64.
+#9 9.175 Preparing to unpack .../08-libunistring5_1.3-2_amd64.deb ...
+#9 9.176 Unpacking libunistring5:amd64 (1.3-2) ...
+#9 9.218 Selecting previously unselected package libidn2-0:amd64.
+#9 9.220 Preparing to unpack .../09-libidn2-0_2.3.8-2_amd64.deb ...
+#9 9.221 Unpacking libidn2-0:amd64 (2.3.8-2) ...
+#9 9.244 Selecting previously unselected package libp11-kit0:amd64.
+#9 9.246 Preparing to unpack .../10-libp11-kit0_0.25.5-3_amd64.deb ...
+#9 9.247 Unpacking libp11-kit0:amd64 (0.25.5-3) ...
+#9 9.280 Selecting previously unselected package libtasn1-6:amd64.
+#9 9.282 Preparing to unpack .../11-libtasn1-6_4.20.0-2+deb13u1_amd64.deb ...
+#9 9.283 Unpacking libtasn1-6:amd64 (4.20.0-2+deb13u1) ...
+#9 9.301 Selecting previously unselected package libgnutls30t64:amd64.
+#9 9.303 Preparing to unpack .../12-libgnutls30t64_3.8.9-3+deb13u4_amd64.deb ...
+#9 9.304 Unpacking libgnutls30t64:amd64 (3.8.9-3+deb13u4) ...
+#9 9.370 Selecting previously unselected package libpsl5t64:amd64.
+#9 9.372 Preparing to unpack .../13-libpsl5t64_0.21.2-1.1+b1_amd64.deb ...
+#9 9.373 Unpacking libpsl5t64:amd64 (0.21.2-1.1+b1) ...
+#9 9.392 Selecting previously unselected package wget.
+#9 9.394 Preparing to unpack .../14-wget_1.25.0-2_amd64.deb ...
+#9 9.395 Unpacking wget (1.25.0-2) ...
+#9 9.452 Selecting previously unselected package libbrotli1:amd64.
+#9 9.453 Preparing to unpack .../15-libbrotli1_1.1.0-2+deb13u1_amd64.deb ...
+#9 9.454 Unpacking libbrotli1:amd64 (1.1.0-2+deb13u1) ...
+#9 9.485 Selecting previously unselected package libkrb5support0:amd64.
+#9 9.487 Preparing to unpack .../16-libkrb5support0_1.21.3-5+deb13u1_amd64.deb ...
+#9 9.488 Unpacking libkrb5support0:amd64 (1.21.3-5+deb13u1) ...
+#9 9.506 Selecting previously unselected package libcom-err2:amd64.
+#9 9.508 Preparing to unpack .../17-libcom-err2_1.47.2-3+b12_amd64.deb ...
+#9 9.509 Unpacking libcom-err2:amd64 (1.47.2-3+b12) ...
+#9 9.526 Selecting previously unselected package libk5crypto3:amd64.
+#9 9.528 Preparing to unpack .../18-libk5crypto3_1.21.3-5+deb13u1_amd64.deb ...
+#9 9.529 Unpacking libk5crypto3:amd64 (1.21.3-5+deb13u1) ...
+#9 9.549 Selecting previously unselected package libkeyutils1:amd64.
+#9 9.551 Preparing to unpack .../19-libkeyutils1_1.6.3-6_amd64.deb ...
+#9 9.552 Unpacking libkeyutils1:amd64 (1.6.3-6) ...
+#9 9.571 Selecting previously unselected package libkrb5-3:amd64.
+#9 9.572 Preparing to unpack .../20-libkrb5-3_1.21.3-5+deb13u1_amd64.deb ...
+#9 9.573 Unpacking libkrb5-3:amd64 (1.21.3-5+deb13u1) ...
+#9 9.607 Selecting previously unselected package libgssapi-krb5-2:amd64.
+#9 9.608 Preparing to unpack .../21-libgssapi-krb5-2_1.21.3-5+deb13u1_amd64.deb ...
+#9 9.609 Unpacking libgssapi-krb5-2:amd64 (1.21.3-5+deb13u1) ...
+#9 9.632 Selecting previously unselected package libsasl2-modules-db:amd64.
+#9 9.634 Preparing to unpack .../22-libsasl2-modules-db_2.1.28+dfsg1-9_amd64.deb ...
+#9 9.635 Unpacking libsasl2-modules-db:amd64 (2.1.28+dfsg1-9) ...
+#9 9.653 Selecting previously unselected package libsasl2-2:amd64.
+#9 9.654 Preparing to unpack .../23-libsasl2-2_2.1.28+dfsg1-9_amd64.deb ...
+#9 9.655 Unpacking libsasl2-2:amd64 (2.1.28+dfsg1-9) ...
+#9 9.675 Selecting previously unselected package libldap2:amd64.
+#9 9.677 Preparing to unpack .../24-libldap2_2.6.10+dfsg-1_amd64.deb ...
+#9 9.678 Unpacking libldap2:amd64 (2.6.10+dfsg-1) ...
+#9 9.703 Selecting previously unselected package libnghttp2-14:amd64.
+#9 9.705 Preparing to unpack .../25-libnghttp2-14_1.64.0-1.1+deb13u1_amd64.deb ...
+#9 9.706 Unpacking libnghttp2-14:amd64 (1.64.0-1.1+deb13u1) ...
+#9 9.726 Selecting previously unselected package libnghttp3-9:amd64.
+#9 9.728 Preparing to unpack .../26-libnghttp3-9_1.8.0-1_amd64.deb ...
+#9 9.729 Unpacking libnghttp3-9:amd64 (1.8.0-1) ...
+#9 9.749 Selecting previously unselected package librtmp1:amd64.
+#9 9.751 Preparing to unpack .../27-librtmp1_2.4+20151223.gitfa8646d.1-2+b5_amd64.deb ...
+#9 9.752 Unpacking librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b5) ...
+#9 9.771 Selecting previously unselected package libssh2-1t64:amd64.
+#9 9.773 Preparing to unpack .../28-libssh2-1t64_1.11.1-1+deb13u2_amd64.deb ...
+#9 9.774 Unpacking libssh2-1t64:amd64 (1.11.1-1+deb13u2) ...
+#9 9.798 Selecting previously unselected package libcurl4t64:amd64.
+#9 9.800 Preparing to unpack .../29-libcurl4t64_8.14.1-2+deb13u7_amd64.deb ...
+#9 9.801 Unpacking libcurl4t64:amd64 (8.14.1-2+deb13u7) ...
+#9 9.832 Selecting previously unselected package curl.
+#9 9.834 Preparing to unpack .../30-curl_8.14.1-2+deb13u7_amd64.deb ...
+#9 9.835 Unpacking curl (8.14.1-2+deb13u7) ...
+#9 9.862 Selecting previously unselected package gh.
+#9 9.864 Preparing to unpack .../31-gh_2.46.0-3_amd64.deb ...
+#9 9.865 Unpacking gh (2.46.0-3) ...
+#9 10.21 Selecting previously unselected package libngtcp2-16:amd64.
+#9 10.21 Preparing to unpack .../32-libngtcp2-16_1.11.0-1+deb13u1_amd64.deb ...
+#9 10.21 Unpacking libngtcp2-16:amd64 (1.11.0-1+deb13u1) ...
+#9 10.23 Selecting previously unselected package libngtcp2-crypto-gnutls8:amd64.
+#9 10.23 Preparing to unpack .../33-libngtcp2-crypto-gnutls8_1.11.0-1+deb13u1_amd64.deb ...
+#9 10.23 Unpacking libngtcp2-crypto-gnutls8:amd64 (1.11.0-1+deb13u1) ...
+#9 10.25 Selecting previously unselected package libcurl3t64-gnutls:amd64.
+#9 10.25 Preparing to unpack .../34-libcurl3t64-gnutls_8.14.1-2+deb13u7_amd64.deb ...
+#9 10.25 Unpacking libcurl3t64-gnutls:amd64 (8.14.1-2+deb13u7) ...
+#9 10.29 Selecting previously unselected package liberror-perl.
+#9 10.29 Preparing to unpack .../35-liberror-perl_0.17030-1_all.deb ...
+#9 10.29 Unpacking liberror-perl (0.17030-1) ...
+#9 10.30 Selecting previously unselected package git-man.
+#9 10.31 Preparing to unpack .../36-git-man_1%3a2.47.3-0+deb13u1_all.deb ...
+#9 10.31 Unpacking git-man (1:2.47.3-0+deb13u1) ...
+#9 10.37 Selecting previously unselected package git.
+#9 10.37 Preparing to unpack .../37-git_1%3a2.47.3-0+deb13u1_amd64.deb ...
+#9 10.38 Unpacking git (1:2.47.3-0+deb13u1) ...
+#9 10.71 Selecting previously unselected package gosu.
+#9 10.71 Preparing to unpack .../38-gosu_1.17-3+b4_amd64.deb ...
+#9 10.71 Unpacking gosu (1.17-3+b4) ...
+#9 10.77 Selecting previously unselected package ripgrep.
+#9 10.77 Preparing to unpack .../39-ripgrep_14.1.1-1+b4_amd64.deb ...
+#9 10.77 Unpacking ripgrep (14.1.1-1+b4) ...
+#9 10.86 Selecting previously unselected package tini.
+#9 10.86 Preparing to unpack .../40-tini_0.19.0-3+b8_amd64.deb ...
+#9 10.86 Unpacking tini (0.19.0-3+b8) ...
+#9 10.90 Setting up media-types (13.0.0) ...
+#9 10.90 Setting up libkeyutils1:amd64 (1.6.3-6) ...
+#9 10.91 Setting up libgdbm6t64:amd64 (1.24-2) ...
+#9 10.91 Setting up libgdbm-compat4t64:amd64 (1.24-2) ...
+#9 10.91 Setting up libbrotli1:amd64 (1.1.0-2+deb13u1) ...
+#9 10.91 Setting up libnghttp2-14:amd64 (1.64.0-1.1+deb13u1) ...
+#9 10.92 Setting up libcom-err2:amd64 (1.47.2-3+b12) ...
+#9 10.92 Setting up libkrb5support0:amd64 (1.21.3-5+deb13u1) ...
+#9 10.92 Setting up libsasl2-modules-db:amd64 (2.1.28+dfsg1-9) ...
+#9 10.92 Setting up gosu (1.17-3+b4) ...
+#9 10.93 Setting up libunistring5:amd64 (1.3-2) ...
+#9 10.93 Setting up tini (0.19.0-3+b8) ...
+#9 10.93 Setting up gh (2.46.0-3) ...
+#9 10.93 Setting up libncursesw6:amd64 (6.5+20250216-2) ...
+#9 10.94 Setting up libk5crypto3:amd64 (1.21.3-5+deb13u1) ...
+#9 10.94 Setting up libsasl2-2:amd64 (2.1.28+dfsg1-9) ...
+#9 10.94 Setting up libnghttp3-9:amd64 (1.8.0-1) ...
+#9 10.94 Setting up libffi8:amd64 (3.4.8-2) ...
+#9 10.95 Setting up perl-modules-5.40 (5.40.1-6+deb13u1) ...
+#9 10.95 Setting up ripgrep (14.1.1-1+b4) ...
+#9 10.95 Setting up libtasn1-6:amd64 (4.20.0-2+deb13u1) ...
+#9 10.95 Setting up git-man (1:2.47.3-0+deb13u1) ...
+#9 10.96 Setting up netbase (6.5) ...
+#9 10.96 Setting up libngtcp2-16:amd64 (1.11.0-1+deb13u1) ...
+#9 10.97 Setting up libkrb5-3:amd64 (1.21.3-5+deb13u1) ...
+#9 10.97 Setting up libssh2-1t64:amd64 (1.11.1-1+deb13u2) ...
+#9 10.97 Setting up openssl (3.5.7-1~deb13u3) ...
+#9 10.97 Setting up readline-common (8.2-6) ...
+#9 10.98 Setting up libldap2:amd64 (2.6.10+dfsg-1) ...
+#9 10.99 Setting up libidn2-0:amd64 (2.3.8-2) ...
+#9 10.99 Setting up libperl5.40:amd64 (5.40.1-6+deb13u1) ...
+#9 10.99 Setting up ca-certificates (20250419+deb13u1) ...
+#9 11.07 debconf: unable to initialize frontend: Dialog
+#9 11.07 debconf: (TERM is not set, so the dialog frontend is not usable.)
+#9 11.07 debconf: falling back to frontend: Readline
+#9 11.08 debconf: unable to initialize frontend: Readline
+#9 11.08 debconf: (This frontend requires a controlling tty.)
+#9 11.08 debconf: falling back to frontend: Teletype
+#9 11.09 debconf: unable to initialize frontend: Teletype
+#9 11.09 debconf: (This frontend requires a controlling tty.)
+#9 11.09 debconf: falling back to frontend: Noninteractive
+#9 11.63 Updating certificates in /etc/ssl/certs...
+#9 12.42 148 added, 0 removed; done.
+#9 12.44 Setting up perl (5.40.1-6+deb13u1) ...
+#9 12.45 Setting up libp11-kit0:amd64 (0.25.5-3) ...
+#9 12.45 Setting up libgssapi-krb5-2:amd64 (1.21.3-5+deb13u1) ...
+#9 12.46 Setting up libreadline8t64:amd64 (8.2-6) ...
+#9 12.46 Setting up libpython3.13-stdlib:amd64 (3.13.5-2+deb13u5) ...
+#9 12.46 Setting up libpython3-stdlib:amd64 (3.13.5-1) ...
+#9 12.46 Setting up libgnutls30t64:amd64 (3.8.9-3+deb13u4) ...
+#9 12.47 Setting up python3.13 (3.13.5-2+deb13u5) ...
+#9 13.31 Setting up libpsl5t64:amd64 (0.21.2-1.1+b1) ...
+#9 13.31 Setting up python3 (3.13.5-1) ...
+#9 13.32 running python rtupdate hooks for python3.13...
+#9 13.32 running python post-rtupdate hooks for python3.13...
+#9 13.41 Setting up liberror-perl (0.17030-1) ...
+#9 13.41 Setting up librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b5) ...
+#9 13.41 Setting up libngtcp2-crypto-gnutls8:amd64 (1.11.0-1+deb13u1) ...
+#9 13.42 Setting up wget (1.25.0-2) ...
+#9 13.42 Setting up libcurl4t64:amd64 (8.14.1-2+deb13u7) ...
+#9 13.42 Setting up libcurl3t64-gnutls:amd64 (8.14.1-2+deb13u7) ...
+#9 13.42 Setting up git (1:2.47.3-0+deb13u1) ...
+#9 13.43 Setting up curl (8.14.1-2+deb13u7) ...
+#9 13.44 Processing triggers for libc-bin (2.41-12+deb13u4) ...
+#9 13.47 Processing triggers for ca-certificates (20250419+deb13u1) ...
+#9 13.47 Updating certificates in /etc/ssl/certs...
+#9 14.09 0 added, 0 removed; done.
+#9 14.09 Running hooks in /etc/ca-certificates/update.d...
+#9 14.09 done.
+#9 DONE 16.5s
+
+#8 [internal] load build context
+#8 ...
+
+#10 [base 3/3] RUN usermod -u 1000 --non-unique node   && groupmod -g 1000 --non-unique node   && usermod -g 1000 -d /paperclip node
+#10 0.114 usermod: no changes
+#10 DONE 0.1s
+
+#11 [deps  1/36] WORKDIR /app
+#11 DONE 0.0s
+
+#12 [deps  2/36] COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
+#12 DONE 0.0s
+
+#13 [deps  3/36] COPY cli/package.json cli/
+#13 DONE 0.0s
+
+#14 [deps  4/36] COPY server/package.json server/
+#14 DONE 0.0s
+
+#15 [deps  5/36] COPY ui/package.json ui/
+#15 DONE 0.0s
+
+#16 [rust-toolchain 2/5] RUN apt-get update   && apt-get install -y --no-install-recommends gcc libc6-dev pkg-config   && rm -rf /var/lib/apt/lists/*
+#16 ...
+
+#17 [deps  6/36] COPY packages/shared/package.json packages/shared/
+#17 DONE 0.0s
+
+#18 [deps  7/36] COPY packages/db/package.json packages/db/
+#18 DONE 0.0s
+
+#19 [deps  8/36] COPY packages/adapter-utils/package.json packages/adapter-utils/
+#19 DONE 0.0s
+
+#20 [deps  9/36] COPY packages/google-sheets-mcp-server/package.json packages/google-sheets-mcp-server/
+#20 DONE 0.0s
+
+#21 [deps 10/36] COPY packages/kv-demo-mcp-server/package.json packages/kv-demo-mcp-server/
+#21 DONE 0.0s
+
+#22 [deps 11/36] COPY packages/mcp-server/package.json packages/mcp-server/
+#22 DONE 0.0s
+
+#23 [deps 12/36] COPY packages/paperclip-eval-kernel/package.json packages/paperclip-eval-kernel/
+#23 DONE 0.0s
+
+#24 [deps 13/36] COPY packages/paperclip-runner/package.json packages/paperclip-runner/
+#24 DONE 0.0s
+
+#25 [deps 14/36] COPY packages/skills-catalog/package.json packages/skills-catalog/
+#25 DONE 0.0s
+
+#26 [deps 15/36] COPY packages/tailscale-https-broker/package.json packages/tailscale-https-broker/
+#26 DONE 0.0s
+
+#27 [deps 16/36] COPY packages/teams-catalog/package.json packages/teams-catalog/
+#27 DONE 0.0s
+
+#28 [production 2/7] RUN echo "cli-tools-epoch: "   && npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai @google/gemini-cli@latest @moonshot-ai/kimi-code@latest   && apt-get update   && apt-get install -y --no-install-recommends openssh-client jq   && rm -rf /var/lib/apt/lists/*   && mkdir -p /paperclip   && chown node:node /paperclip
+#28 0.076 cli-tools-epoch: 
+#28 ...
+
+#29 [deps 17/36] COPY packages/adapters/claude-local/package.json packages/adapters/claude-local/
+#29 DONE 0.0s
+
+#30 [deps 18/36] COPY packages/adapters/codex-local/package.json packages/adapters/codex-local/
+#30 DONE 0.0s
+
+#31 [deps 19/36] COPY packages/adapters/cursor-cloud/package.json packages/adapters/cursor-cloud/
+#31 DONE 0.1s
+
+#32 [deps 20/36] COPY packages/adapters/cursor-local/package.json packages/adapters/cursor-local/
+#32 DONE 0.1s
+
+#16 [rust-toolchain 2/5] RUN apt-get update   && apt-get install -y --no-install-recommends gcc libc6-dev pkg-config   && rm -rf /var/lib/apt/lists/*
+#16 0.303 Get:1 http://deb.debian.org/debian trixie InRelease [140 kB]
+#16 0.321 Get:2 http://deb.debian.org/debian trixie-updates InRelease [47.3 kB]
+#16 0.321 Get:3 http://deb.debian.org/debian-security trixie-security InRelease [43.4 kB]
+#16 0.350 Get:4 http://deb.debian.org/debian trixie/main amd64 Packages [9678 kB]
+#16 0.443 Get:5 http://deb.debian.org/debian trixie-updates/main amd64 Packages [720 B]
+#16 0.443 Get:6 http://deb.debian.org/debian-security trixie-security/main amd64 Packages [270 kB]
+#16 ...
+
+#33 [deps 21/36] COPY packages/adapters/gemini-local/package.json packages/adapters/gemini-local/
+#33 DONE 0.0s
+
+#34 [deps 22/36] COPY packages/adapters/grok-local/package.json packages/adapters/grok-local/
+#34 DONE 0.0s
+
+#35 [deps 23/36] COPY packages/adapters/kimi-local/package.json packages/adapters/kimi-local/
+#35 DONE 0.0s
+
+#36 [deps 24/36] COPY packages/adapters/hermes/package.json packages/adapters/hermes/
+#36 DONE 0.1s
+
+#37 [deps 25/36] COPY packages/adapters/hermes-gateway/package.json packages/adapters/hermes-gateway/
+#37 DONE 0.1s
+
+#16 [rust-toolchain 2/5] RUN apt-get update   && apt-get install -y --no-install-recommends gcc libc6-dev pkg-config   && rm -rf /var/lib/apt/lists/*
+#16 ...
+
+#38 [deps 26/36] COPY packages/adapters/openclaw-gateway/package.json packages/adapters/openclaw-gateway/
+#38 DONE 0.1s
+
+#39 [deps 27/36] COPY packages/adapters/opencode-local/package.json packages/adapters/opencode-local/
+#39 DONE 0.0s
+
+#40 [deps 28/36] COPY packages/adapters/pi-local/package.json packages/adapters/pi-local/
+#40 DONE 0.0s
+
+#41 [deps 29/36] COPY packages/plugins/sdk/package.json packages/plugins/sdk/
+#41 DONE 0.0s
+
+#42 [deps 30/36] COPY --parents packages/plugins/sandbox-providers/./*/package.json packages/plugins/sandbox-providers/
+#42 DONE 0.0s
+
+#43 [deps 31/36] COPY packages/plugins/paperclip-plugin-fake-sandbox/package.json packages/plugins/paperclip-plugin-fake-sandbox/
+#43 DONE 0.1s
+
+#16 [rust-toolchain 2/5] RUN apt-get update   && apt-get install -y --no-install-recommends gcc libc6-dev pkg-config   && rm -rf /var/lib/apt/lists/*
+#16 ...
+
+#44 [deps 32/36] COPY packages/plugins/plugin-llm-wiki/package.json packages/plugins/plugin-llm-wiki/
+#44 DONE 0.0s
+
+#45 [deps 33/36] COPY packages/plugins/plugin-workspace-diff/package.json packages/plugins/plugin-workspace-diff/
+#45 DONE 0.1s
+
+#46 [deps 34/36] COPY patches/ patches/
+#46 DONE 0.1s
+
+#47 [deps 35/36] COPY scripts/link-plugin-dev-sdk.mjs scripts/
+#47 DONE 0.1s
+
+#8 [internal] load build context
+#8 ...
+
+#16 [rust-toolchain 2/5] RUN apt-get update   && apt-get install -y --no-install-recommends gcc libc6-dev pkg-config   && rm -rf /var/lib/apt/lists/*
+#16 1.535 Fetched 10.2 MB in 1s (7175 kB/s)
+#16 1.535 Reading package lists...
+#16 2.326 Reading package lists...
+#16 3.046 Building dependency tree...
+#16 3.237 Reading state information...
+#16 3.490 The following additional packages will be installed:
+#16 3.490   binutils binutils-common binutils-x86-64-linux-gnu cpp cpp-14
+#16 3.490   cpp-14-x86-64-linux-gnu cpp-x86-64-linux-gnu gcc-14 gcc-14-x86-64-linux-gnu
+#16 3.490   gcc-x86-64-linux-gnu libasan8 libatomic1 libbinutils libc-dev-bin libcc1-0
+#16 3.490   libcrypt-dev libctf-nobfd0 libctf0 libgcc-14-dev libgomp1 libgprofng0
+#16 3.490   libhwasan0 libisl23 libitm1 libjansson4 liblsan0 libmpc3 libmpfr6
+#16 3.491   libpkgconf3 libquadmath0 libsframe1 libtsan2 libubsan1 linux-libc-dev
+#16 3.491   pkgconf pkgconf-bin rpcsvc-proto
+#16 3.493 Suggested packages:
+#16 3.493   binutils-doc gprofng-gui binutils-gold cpp-doc gcc-14-locales cpp-14-doc
+#16 3.493   gcc-multilib make manpages-dev autoconf automake libtool flex bison gdb
+#16 3.493   gcc-doc gcc-14-multilib gcc-14-doc gdb-x86-64-linux-gnu libc-devtools
+#16 3.493   glibc-doc
+#16 3.493 Recommended packages:
+#16 3.493   manpages manpages-dev
+#16 3.618 The following NEW packages will be installed:
+#16 3.621   binutils binutils-common binutils-x86-64-linux-gnu cpp cpp-14
+#16 3.621   cpp-14-x86-64-linux-gnu cpp-x86-64-linux-gnu gcc gcc-14
+#16 3.621   gcc-14-x86-64-linux-gnu gcc-x86-64-linux-gnu libasan8 libatomic1 libbinutils
+#16 3.621   libc-dev-bin libc6-dev libcc1-0 libcrypt-dev libctf-nobfd0 libctf0
+#16 3.621   libgcc-14-dev libgomp1 libgprofng0 libhwasan0 libisl23 libitm1 libjansson4
+#16 3.621   liblsan0 libmpc3 libmpfr6 libpkgconf3 libquadmath0 libsframe1 libtsan2
+#16 3.621   libubsan1 linux-libc-dev pkg-config pkgconf pkgconf-bin rpcsvc-proto
+#16 3.670 0 upgraded, 40 newly installed, 0 to remove and 1 not upgraded.
+#16 3.670 Need to get 57.3 MB of archives.
+#16 3.670 After this operation, 217 MB of additional disk space will be used.
+#16 3.670 Get:1 http://deb.debian.org/debian trixie/main amd64 libsframe1 amd64 2.44-3 [78.4 kB]
+#16 3.685 Get:2 http://deb.debian.org/debian trixie/main amd64 binutils-common amd64 2.44-3 [2509 kB]
+#16 3.714 Get:3 http://deb.debian.org/debian trixie/main amd64 libbinutils amd64 2.44-3 [534 kB]
+#16 3.719 Get:4 http://deb.debian.org/debian trixie/main amd64 libgprofng0 amd64 2.44-3 [808 kB]
+#16 3.725 Get:5 http://deb.debian.org/debian trixie/main amd64 libctf-nobfd0 amd64 2.44-3 [156 kB]
+#16 3.727 Get:6 http://deb.debian.org/debian trixie/main amd64 libctf0 amd64 2.44-3 [88.6 kB]
+#16 3.728 Get:7 http://deb.debian.org/debian trixie/main amd64 libjansson4 amd64 2.14-2+b3 [39.8 kB]
+#16 3.728 Get:8 http://deb.debian.org/debian trixie/main amd64 binutils-x86-64-linux-gnu amd64 2.44-3 [1014 kB]
+#16 3.735 Get:9 http://deb.debian.org/debian trixie/main amd64 binutils amd64 2.44-3 [265 kB]
+#16 3.736 Get:10 http://deb.debian.org/debian trixie/main amd64 libisl23 amd64 0.27-1 [659 kB]
+#16 3.740 Get:11 http://deb.debian.org/debian trixie/main amd64 libmpfr6 amd64 4.2.2-1 [729 kB]
+#16 3.744 Get:12 http://deb.debian.org/debian trixie/main amd64 libmpc3 amd64 1.3.1-1+b3 [52.2 kB]
+#16 3.744 Get:13 http://deb.debian.org/debian trixie/main amd64 cpp-14-x86-64-linux-gnu amd64 14.2.0-19 [11.0 MB]
+#16 3.803 Get:14 http://deb.debian.org/debian trixie/main amd64 cpp-14 amd64 14.2.0-19 [1280 B]
+#16 3.804 Get:15 http://deb.debian.org/debian trixie/main amd64 cpp-x86-64-linux-gnu amd64 4:14.2.0-1 [4840 B]
+#16 3.804 Get:16 http://deb.debian.org/debian trixie/main amd64 cpp amd64 4:14.2.0-1 [1568 B]
+#16 3.806 Get:17 http://deb.debian.org/debian trixie/main amd64 libcc1-0 amd64 14.2.0-19 [42.8 kB]
+#16 3.806 Get:18 http://deb.debian.org/debian trixie/main amd64 libgomp1 amd64 14.2.0-19 [137 kB]
+#16 3.807 Get:19 http://deb.debian.org/debian trixie/main amd64 libitm1 amd64 14.2.0-19 [26.0 kB]
+#16 3.807 Get:20 http://deb.debian.org/debian trixie/main amd64 libatomic1 amd64 14.2.0-19 [9308 B]
+#16 3.808 Get:21 http://deb.debian.org/debian trixie/main amd64 libasan8 amd64 14.2.0-19 [2725 kB]
+#16 3.819 Get:22 http://deb.debian.org/debian trixie/main amd64 liblsan0 amd64 14.2.0-19 [1204 kB]
+#16 3.825 Get:23 http://deb.debian.org/debian trixie/main amd64 libtsan2 amd64 14.2.0-19 [2460 kB]
+#16 3.837 Get:24 http://deb.debian.org/debian trixie/main amd64 libubsan1 amd64 14.2.0-19 [1074 kB]
+#16 3.846 Get:25 http://deb.debian.org/debian trixie/main amd64 libhwasan0 amd64 14.2.0-19 [1488 kB]
+#16 3.850 Get:26 http://deb.debian.org/debian trixie/main amd64 libquadmath0 amd64 14.2.0-19 [145 kB]
+#16 3.851 Get:27 http://deb.debian.org/debian trixie/main amd64 libgcc-14-dev amd64 14.2.0-19 [2672 kB]
+#16 3.864 Get:28 http://deb.debian.org/debian trixie/main amd64 gcc-14-x86-64-linux-gnu amd64 14.2.0-19 [21.4 MB]
+#16 3.974 Get:29 http://deb.debian.org/debian trixie/main amd64 gcc-14 amd64 14.2.0-19 [540 kB]
+#16 3.982 Get:30 http://deb.debian.org/debian trixie/main amd64 gcc-x86-64-linux-gnu amd64 4:14.2.0-1 [1436 B]
+#16 3.982 Get:31 http://deb.debian.org/debian trixie/main amd64 gcc amd64 4:14.2.0-1 [5136 B]
+#16 3.982 Get:32 http://deb.debian.org/debian trixie/main amd64 libc-dev-bin amd64 2.41-12+deb13u4 [60.0 kB]
+#16 3.982 Get:33 http://deb.debian.org/debian-security trixie-security/main amd64 linux-libc-dev all 6.12.113-1 [3021 kB]
+#16 3.989 Get:34 http://deb.debian.org/debian trixie/main amd64 libcrypt-dev amd64 1:4.4.38-1 [119 kB]
+#16 3.989 Get:35 http://deb.debian.org/debian trixie/main amd64 rpcsvc-proto amd64 1.4.3-1 [63.3 kB]
+#16 3.990 Get:36 http://deb.debian.org/debian trixie/main amd64 libc6-dev amd64 2.41-12+deb13u4 [1995 kB]
+#16 3.999 Get:37 http://deb.debian.org/debian trixie/main amd64 libpkgconf3 amd64 1.8.1-4 [36.4 kB]
+#16 4.000 Get:38 http://deb.debian.org/debian trixie/main amd64 pkgconf-bin amd64 1.8.1-4 [30.2 kB]
+#16 4.000 Get:39 http://deb.debian.org/debian trixie/main amd64 pkgconf amd64 1.8.1-4 [26.2 kB]
+#16 4.001 Get:40 http://deb.debian.org/debian trixie/main amd64 pkg-config amd64 1.8.1-4 [14.0 kB]
+#16 4.176 debconf: unable to initialize frontend: Dialog
+#16 4.176 debconf: (TERM is not set, so the dialog frontend is not usable.)
+#16 4.176 debconf: falling back to frontend: Readline
+#16 4.185 debconf: unable to initialize frontend: Readline
+#16 4.185 debconf: (This frontend requires a controlling tty.)
+#16 4.186 debconf: falling back to frontend: Teletype
+#16 4.192 debconf: unable to initialize frontend: Teletype
+#16 4.192 debconf: (This frontend requires a controlling tty.)
+#16 4.193 debconf: falling back to frontend: Noninteractive
+#16 5.833 Fetched 57.3 MB in 0s (158 MB/s)
+#16 5.867 Selecting previously unselected package libsframe1:amd64.
+#16 5.867 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 10325 files and directories currently installed.)
+#16 5.883 Preparing to unpack .../00-libsframe1_2.44-3_amd64.deb ...
+#16 5.885 Unpacking libsframe1:amd64 (2.44-3) ...
+#16 5.922 Selecting previously unselected package binutils-common:amd64.
+#16 5.924 Preparing to unpack .../01-binutils-common_2.44-3_amd64.deb ...
+#16 5.925 Unpacking binutils-common:amd64 (2.44-3) ...
+#16 6.071 Selecting previously unselected package libbinutils:amd64.
+#16 6.073 Preparing to unpack .../02-libbinutils_2.44-3_amd64.deb ...
+#16 6.075 Unpacking libbinutils:amd64 (2.44-3) ...
+#16 6.137 Selecting previously unselected package libgprofng0:amd64.
+#16 6.139 Preparing to unpack .../03-libgprofng0_2.44-3_amd64.deb ...
+#16 6.141 Unpacking libgprofng0:amd64 (2.44-3) ...
+#16 6.241 Selecting previously unselected package libctf-nobfd0:amd64.
+#16 6.244 Preparing to unpack .../04-libctf-nobfd0_2.44-3_amd64.deb ...
+#16 6.245 Unpacking libctf-nobfd0:amd64 (2.44-3) ...
+#16 6.283 Selecting previously unselected package libctf0:amd64.
+#16 6.286 Preparing to unpack .../05-libctf0_2.44-3_amd64.deb ...
+#16 6.288 Unpacking libctf0:amd64 (2.44-3) ...
+#16 6.559 Selecting previously unselected package libjansson4:amd64.
+#16 6.560 Preparing to unpack .../06-libjansson4_2.14-2+b3_amd64.deb ...
+#16 6.561 Unpacking libjansson4:amd64 (2.14-2+b3) ...
+#16 6.594 Selecting previously unselected package binutils-x86-64-linux-gnu.
+#16 6.596 Preparing to unpack .../07-binutils-x86-64-linux-gnu_2.44-3_amd64.deb ...
+#16 6.602 Unpacking binutils-x86-64-linux-gnu (2.44-3) ...
+#16 6.787 Selecting previously unselected package binutils.
+#16 6.789 Preparing to unpack .../08-binutils_2.44-3_amd64.deb ...
+#16 6.791 Unpacking binutils (2.44-3) ...
+#16 8.206 Selecting previously unselected package libisl23:amd64.
+#16 8.214 Preparing to unpack .../09-libisl23_0.27-1_amd64.deb ...
+#16 8.215 Unpacking libisl23:amd64 (0.27-1) ...
+#16 8.297 Selecting previously unselected package libmpfr6:amd64.
+#16 8.299 Preparing to unpack .../10-libmpfr6_4.2.2-1_amd64.deb ...
+#16 8.300 Unpacking libmpfr6:amd64 (4.2.2-1) ...
+#16 8.365 Selecting previously unselected package libmpc3:amd64.
+#16 8.367 Preparing to unpack .../11-libmpc3_1.3.1-1+b3_amd64.deb ...
+#16 8.369 Unpacking libmpc3:amd64 (1.3.1-1+b3) ...
+#16 8.390 Selecting previously unselected package cpp-14-x86-64-linux-gnu.
+#16 8.390 Preparing to unpack .../12-cpp-14-x86-64-linux-gnu_14.2.0-19_amd64.deb ...
+#16 8.391 Unpacking cpp-14-x86-64-linux-gnu (14.2.0-19) ...
+#16 10.61 Selecting previously unselected package cpp-14.
+#16 10.62 Preparing to unpack .../13-cpp-14_14.2.0-19_amd64.deb ...
+#16 10.90 Unpacking cpp-14 (14.2.0-19) ...
+#16 11.39 Selecting previously unselected package cpp-x86-64-linux-gnu.
+#16 11.40 Preparing to unpack .../14-cpp-x86-64-linux-gnu_4%3a14.2.0-1_amd64.deb ...
+#16 11.40 Unpacking cpp-x86-64-linux-gnu (4:14.2.0-1) ...
+#16 11.42 Selecting previously unselected package cpp.
+#16 11.42 Preparing to unpack .../15-cpp_4%3a14.2.0-1_amd64.deb ...
+#16 11.43 Unpacking cpp (4:14.2.0-1) ...
+#16 11.46 Selecting previously unselected package libcc1-0:amd64.
+#16 11.46 Preparing to unpack .../16-libcc1-0_14.2.0-19_amd64.deb ...
+#16 11.47 Unpacking libcc1-0:amd64 (14.2.0-19) ...
+#16 11.50 Selecting previously unselected package libgomp1:amd64.
+#16 11.50 Preparing to unpack .../17-libgomp1_14.2.0-19_amd64.deb ...
+#16 ...
+
+#48 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#48 0.146 ! Corepack is about to download https://registry.npmjs.org/pnpm/-/pnpm-9.15.4.tgz
+#48 1.568 Scope: all 31 workspace projects
+#48 1.579 (node:7) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+#48 1.579 (Use `node --trace-deprecation ...` to show where the warning was created)
+#48 1.822 Progress: resolved 1, reused 0, downloaded 0, added 0
+#48 1.871 
+#48 1.871    ╭───────────────────────────────────────────────────────────────────╮
+#48 1.871    │                                                                   │
+#48 1.871    │                Update available! 9.15.4 → 12.15.0.                │
+#48 1.871    │   Changelog: https://github.com/pnpm/pnpm/releases/tag/v12.15.0   │
+#48 1.871    │         Run "corepack install -g pnpm@12.15.0" to update.         │
+#48 1.871    │                                                                   │
+#48 1.871    ╰───────────────────────────────────────────────────────────────────╯
+#48 1.871 
+#48 3.052 Progress: resolved 17, reused 0, downloaded 0, added 0
+#48 3.787 server                                   |  WARN  deprecated @types/sharp@0.32.0
+#48 4.053 Progress: resolved 80, reused 0, downloaded 0, added 0
+#48 5.155 Progress: resolved 132, reused 0, downloaded 0, added 0
+#48 6.156 Progress: resolved 160, reused 0, downloaded 0, added 0
+#48 7.223 Progress: resolved 270, reused 0, downloaded 0, added 0
+#48 8.243 Progress: resolved 320, reused 0, downloaded 0, added 0
+#48 9.280 Progress: resolved 392, reused 0, downloaded 0, added 0
+#48 10.28 Progress: resolved 483, reused 0, downloaded 0, added 0
+#48 ...
+
+#16 [rust-toolchain 2/5] RUN apt-get update   && apt-get install -y --no-install-recommends gcc libc6-dev pkg-config   && rm -rf /var/lib/apt/lists/*
+#16 11.50 Unpacking libgomp1:amd64 (14.2.0-19) ...
+#16 11.54 Selecting previously unselected package libitm1:amd64.
+#16 11.55 Preparing to unpack .../18-libitm1_14.2.0-19_amd64.deb ...
+#16 11.55 Unpacking libitm1:amd64 (14.2.0-19) ...
+#16 11.58 Selecting previously unselected package libatomic1:amd64.
+#16 11.58 Preparing to unpack .../19-libatomic1_14.2.0-19_amd64.deb ...
+#16 11.58 Unpacking libatomic1:amd64 (14.2.0-19) ...
+#16 12.95 Selecting previously unselected package libasan8:amd64.
+#16 12.96 Preparing to unpack .../20-libasan8_14.2.0-19_amd64.deb ...
+#16 13.21 Unpacking libasan8:amd64 (14.2.0-19) ...
+#16 15.67 Selecting previously unselected package liblsan0:amd64.
+#16 15.67 Preparing to unpack .../21-liblsan0_14.2.0-19_amd64.deb ...
+#16 15.91 Unpacking liblsan0:amd64 (14.2.0-19) ...
+#16 19.01 Selecting previously unselected package libtsan2:amd64.
+#16 19.01 Preparing to unpack .../22-libtsan2_14.2.0-19_amd64.deb ...
+#16 19.81 Unpacking libtsan2:amd64 (14.2.0-19) ...
+#16 ...
+
+#48 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#48 11.28 Progress: resolved 605, reused 0, downloaded 0, added 0
+#48 12.28 Progress: resolved 683, reused 0, downloaded 0, added 0
+#48 13.28 Progress: resolved 818, reused 0, downloaded 0, added 0
+#48 14.28 Progress: resolved 952, reused 0, downloaded 0, added 0
+#48 15.29 Progress: resolved 1047, reused 0, downloaded 0, added 0
+#48 16.34 Progress: resolved 1139, reused 0, downloaded 0, added 0
+#48 17.34 Progress: resolved 1234, reused 0, downloaded 0, added 0
+#48 18.34 Progress: resolved 1308, reused 0, downloaded 0, added 0
+#48 19.34 Progress: resolved 1338, reused 0, downloaded 0, added 0
+#48 20.34 Progress: resolved 1403, reused 0, downloaded 0, added 0
+#48 21.34 Progress: resolved 1508, reused 0, downloaded 0, added 0
+#48 22.34 Progress: resolved 1572, reused 0, downloaded 0, added 0
+#48 22.60  WARN  5 deprecated subdependencies found: @esbuild-kit/core-utils@3.3.2, @esbuild-kit/esm-loader@2.6.5, @ungap/structured-clone@1.3.0, node-domexception@1.0.0, uuid@10.0.0
+#48 23.34 Progress: resolved 1575, reused 0, downloaded 0, added 0
+#48 23.56 Progress: resolved 1575, reused 0, downloaded 0, added 0, done
+#48 23.56 
+#48 23.57  WARN  Issues with peer dependencies found
+#48 23.57 server
+#48 23.57 └─┬ better-auth 1.7.2
+#48 23.57   └── ✕ unmet peer vitest@"^2.0.0 || ^3.0.0 || ^4.0.0": found 5.0.3
+#48 23.57 
+#48 23.57 Done in 22.5s
+#48 ...
+
+#16 [rust-toolchain 2/5] RUN apt-get update   && apt-get install -y --no-install-recommends gcc libc6-dev pkg-config   && rm -rf /var/lib/apt/lists/*
+#16 25.04 Selecting previously unselected package libubsan1:amd64.
+#16 25.04 Preparing to unpack .../23-libubsan1_14.2.0-19_amd64.deb ...
+#16 25.77 Unpacking libubsan1:amd64 (14.2.0-19) ...
+#16 ...
+
+#48 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#48 25.42 Scope: all 31 workspace projects
+#48 25.57 (node:19) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+#48 25.57 (Use `node --trace-deprecation ...` to show where the warning was created)
+#48 25.64 Lockfile is up to date, resolution step is skipped
+#48 25.75 Progress: resolved 1, reused 0, downloaded 0, added 0
+#48 25.86 Packages: +1323
+#48 25.86 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#48 26.75 Progress: resolved 1323, reused 0, downloaded 22, added 0
+#48 27.75 Progress: resolved 1323, reused 0, downloaded 23, added 0
+#48 28.76 Progress: resolved 1323, reused 0, downloaded 25, added 22
+#48 29.76 Progress: resolved 1323, reused 0, downloaded 29, added 22
+#48 30.76 Progress: resolved 1323, reused 0, downloaded 31, added 22
+#48 31.98 Progress: resolved 1323, reused 0, downloaded 32, added 22
+#48 32.98 Progress: resolved 1323, reused 0, downloaded 40, added 26
+#48 33.98 Progress: resolved 1323, reused 0, downloaded 55, added 43
+#48 34.98 Progress: resolved 1323, reused 0, downloaded 59, added 50
+#48 35.98 Progress: resolved 1323, reused 0, downloaded 63, added 50
+#48 36.98 Progress: resolved 1323, reused 0, downloaded 77, added 62
+#48 37.98 Progress: resolved 1323, reused 0, downloaded 104, added 98
+#48 38.98 Progress: resolved 1323, reused 0, downloaded 164, added 157
+#48 ...
+
+#16 [rust-toolchain 2/5] RUN apt-get update   && apt-get install -y --no-install-recommends gcc libc6-dev pkg-config   && rm -rf /var/lib/apt/lists/*
+#16 30.94 Selecting previously unselected package libhwasan0:amd64.
+#16 30.94 Preparing to unpack .../24-libhwasan0_14.2.0-19_amd64.deb ...
+#16 31.23 Unpacking libhwasan0:amd64 (14.2.0-19) ...
+#16 35.78 Selecting previously unselected package libquadmath0:amd64.
+#16 35.78 Preparing to unpack .../25-libquadmath0_14.2.0-19_amd64.deb ...
+#16 36.29 Unpacking libquadmath0:amd64 (14.2.0-19) ...
+#16 39.98 Selecting previously unselected package libgcc-14-dev:amd64.
+#16 39.98 Preparing to unpack .../26-libgcc-14-dev_14.2.0-19_amd64.deb ...
+#16 40.48 Unpacking libgcc-14-dev:amd64 (14.2.0-19) ...
+#16 ...
+
+#48 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#48 39.98 Progress: resolved 1323, reused 0, downloaded 177, added 165
+#48 40.99 Progress: resolved 1323, reused 0, downloaded 180, added 170
+#48 ...
+
+#16 [rust-toolchain 2/5] RUN apt-get update   && apt-get install -y --no-install-recommends gcc libc6-dev pkg-config   && rm -rf /var/lib/apt/lists/*
+#16 44.82 Selecting previously unselected package gcc-14-x86-64-linux-gnu.
+#16 44.82 Preparing to unpack .../27-gcc-14-x86-64-linux-gnu_14.2.0-19_amd64.deb ...
+#16 44.95 Unpacking gcc-14-x86-64-linux-gnu (14.2.0-19) ...
+#16 58.43 Selecting previously unselected package gcc-14.
+#16 58.44 Preparing to unpack .../28-gcc-14_14.2.0-19_amd64.deb ...
+#16 58.85 Unpacking gcc-14 (14.2.0-19) ...
+#16 60.50 Selecting previously unselected package gcc-x86-64-linux-gnu.
+#16 60.51 Preparing to unpack .../29-gcc-x86-64-linux-gnu_4%3a14.2.0-1_amd64.deb ...
+#16 61.20 Unpacking gcc-x86-64-linux-gnu (4:14.2.0-1) ...
+#16 ...
+
+#48 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#48 59.97 Progress: resolved 1323, reused 0, downloaded 181, added 170
+#48 60.97 Progress: resolved 1323, reused 0, downloaded 225, added 221
+#48 61.97 Progress: resolved 1323, reused 0, downloaded 258, added 248
+#48 62.97 Progress: resolved 1323, reused 0, downloaded 260, added 249
+#48 63.98 Progress: resolved 1323, reused 0, downloaded 277, added 266
+#48 64.98 Progress: resolved 1323, reused 0, downloaded 285, added 274
+#48 65.98 Progress: resolved 1323, reused 0, downloaded 291, added 283
+#48 67.56 Progress: resolved 1323, reused 0, downloaded 292, added 283
+#48 ...
+
+#16 [rust-toolchain 2/5] RUN apt-get update   && apt-get install -y --no-install-recommends gcc libc6-dev pkg-config   && rm -rf /var/lib/apt/lists/*
+#16 63.73 Selecting previously unselected package gcc.
+#16 63.73 Preparing to unpack .../30-gcc_4%3a14.2.0-1_amd64.deb ...
+#16 64.04 Unpacking gcc (4:14.2.0-1) ...
+#16 65.65 Selecting previously unselected package libc-dev-bin.
+#16 65.65 Preparing to unpack .../31-libc-dev-bin_2.41-12+deb13u4_amd64.deb ...
+#16 65.95 Unpacking libc-dev-bin (2.41-12+deb13u4) ...
+#16 66.99 Selecting previously unselected package linux-libc-dev.
+#16 67.00 Preparing to unpack .../32-linux-libc-dev_6.12.113-1_all.deb ...
+#16 67.31 Unpacking linux-libc-dev (6.12.113-1) ...
+#16 69.93 Selecting previously unselected package libcrypt-dev:amd64.
+#16 69.93 Preparing to unpack .../33-libcrypt-dev_1%3a4.4.38-1_amd64.deb ...
+#16 ...
+
+#48 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#48 68.56 Progress: resolved 1323, reused 0, downloaded 293, added 284
+#48 71.12 Progress: resolved 1323, reused 0, downloaded 294, added 284
+#48 72.13 Progress: resolved 1323, reused 0, downloaded 295, added 284
+#48 73.13 Progress: resolved 1323, reused 0, downloaded 298, added 286
+#48 74.13 Progress: resolved 1323, reused 0, downloaded 301, added 290
+#48 75.14 Progress: resolved 1323, reused 0, downloaded 311, added 300
+#48 ...
+
+#16 [rust-toolchain 2/5] RUN apt-get update   && apt-get install -y --no-install-recommends gcc libc6-dev pkg-config   && rm -rf /var/lib/apt/lists/*
+#16 70.33 Unpacking libcrypt-dev:amd64 (1:4.4.38-1) ...
+#16 71.87 Selecting previously unselected package rpcsvc-proto.
+#16 71.87 Preparing to unpack .../34-rpcsvc-proto_1.4.3-1_amd64.deb ...
+#16 72.51 Unpacking rpcsvc-proto (1.4.3-1) ...
+#16 74.84 Selecting previously unselected package libc6-dev:amd64.
+#16 74.86 Preparing to unpack .../35-libc6-dev_2.41-12+deb13u4_amd64.deb ...
+#16 75.67 Unpacking libc6-dev:amd64 (2.41-12+deb13u4) ...
+#16 77.25 Selecting previously unselected package libpkgconf3:amd64.
+#16 77.26 Preparing to unpack .../36-libpkgconf3_1.8.1-4_amd64.deb ...
+#16 77.27 Unpacking libpkgconf3:amd64 (1.8.1-4) ...
+#16 77.35 Selecting previously unselected package pkgconf-bin.
+#16 77.35 Preparing to unpack .../37-pkgconf-bin_1.8.1-4_amd64.deb ...
+#16 77.37 Unpacking pkgconf-bin (1.8.1-4) ...
+#16 77.47 Selecting previously unselected package pkgconf:amd64.
+#16 77.47 Preparing to unpack .../38-pkgconf_1.8.1-4_amd64.deb ...
+#16 77.49 Unpacking pkgconf:amd64 (1.8.1-4) ...
+#16 77.61 Selecting previously unselected package pkg-config:amd64.
+#16 ...
+
+#48 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#48 76.14 Progress: resolved 1323, reused 0, downloaded 354, added 347
+#48 77.14 Progress: resolved 1323, reused 0, downloaded 440, added 432
+#48 78.14 Progress: resolved 1323, reused 0, downloaded 472, added 468
+#48 79.14 Progress: resolved 1323, reused 0, downloaded 487, added 480
+#48 80.14 Progress: resolved 1323, reused 0, downloaded 505, added 495
+#48 81.14 Progress: resolved 1323, reused 0, downloaded 519, added 512
+#48 ...
+
+#16 [rust-toolchain 2/5] RUN apt-get update   && apt-get install -y --no-install-recommends gcc libc6-dev pkg-config   && rm -rf /var/lib/apt/lists/*
+#16 77.61 Preparing to unpack .../39-pkg-config_1.8.1-4_amd64.deb ...
+#16 77.61 Unpacking pkg-config:amd64 (1.8.1-4) ...
+#16 77.74 Setting up binutils-common:amd64 (2.44-3) ...
+#16 77.78 Setting up linux-libc-dev (6.12.113-1) ...
+#16 77.81 Setting up libctf-nobfd0:amd64 (2.44-3) ...
+#16 77.84 Setting up libgomp1:amd64 (14.2.0-19) ...
+#16 77.86 Setting up libsframe1:amd64 (2.44-3) ...
+#16 77.90 Setting up libjansson4:amd64 (2.14-2+b3) ...
+#16 77.91 Setting up libpkgconf3:amd64 (1.8.1-4) ...
+#16 77.94 Setting up rpcsvc-proto (1.4.3-1) ...
+#16 77.98 Setting up libmpfr6:amd64 (4.2.2-1) ...
+#16 78.02 Setting up libquadmath0:amd64 (14.2.0-19) ...
+#16 78.05 Setting up libmpc3:amd64 (1.3.1-1+b3) ...
+#16 78.09 Setting up libatomic1:amd64 (14.2.0-19) ...
+#16 78.12 Setting up pkgconf-bin (1.8.1-4) ...
+#16 78.15 Setting up libubsan1:amd64 (14.2.0-19) ...
+#16 78.18 Setting up libhwasan0:amd64 (14.2.0-19) ...
+#16 78.20 Setting up libcrypt-dev:amd64 (1:4.4.38-1) ...
+#16 78.25 Setting up libasan8:amd64 (14.2.0-19) ...
+#16 78.29 Setting up libtsan2:amd64 (14.2.0-19) ...
+#16 78.33 Setting up libbinutils:amd64 (2.44-3) ...
+#16 78.37 Setting up libisl23:amd64 (0.27-1) ...
+#16 78.38 Setting up libc-dev-bin (2.41-12+deb13u4) ...
+#16 78.39 Setting up libcc1-0:amd64 (14.2.0-19) ...
+#16 78.41 Setting up liblsan0:amd64 (14.2.0-19) ...
+#16 78.42 Setting up libitm1:amd64 (14.2.0-19) ...
+#16 78.44 Setting up libctf0:amd64 (2.44-3) ...
+#16 78.45 Setting up pkgconf:amd64 (1.8.1-4) ...
+#16 78.46 Setting up libgprofng0:amd64 (2.44-3) ...
+#16 78.47 Setting up pkg-config:amd64 (1.8.1-4) ...
+#16 78.50 Setting up cpp-14-x86-64-linux-gnu (14.2.0-19) ...
+#16 78.51 Setting up cpp-14 (14.2.0-19) ...
+#16 78.53 Setting up libc6-dev:amd64 (2.41-12+deb13u4) ...
+#16 78.54 Setting up libgcc-14-dev:amd64 (14.2.0-19) ...
+#16 78.55 Setting up binutils-x86-64-linux-gnu (2.44-3) ...
+#16 78.59 Setting up cpp-x86-64-linux-gnu (4:14.2.0-1) ...
+#16 78.61 Setting up binutils (2.44-3) ...
+#16 78.63 Setting up cpp (4:14.2.0-1) ...
+#16 78.74 Setting up gcc-14-x86-64-linux-gnu (14.2.0-19) ...
+#16 78.76 Setting up gcc-x86-64-linux-gnu (4:14.2.0-1) ...
+#16 78.79 Setting up gcc-14 (14.2.0-19) ...
+#16 78.83 Setting up gcc (4:14.2.0-1) ...
+#16 78.86 Processing triggers for libc-bin (2.41-12+deb13u4) ...
+#16 ...
+
+#48 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#48 82.14 Progress: resolved 1323, reused 0, downloaded 523, added 515
+#48 83.14 Progress: resolved 1323, reused 0, downloaded 533, added 521
+#48 84.14 Progress: resolved 1323, reused 0, downloaded 551, added 544
+#48 ...
+
+#16 [rust-toolchain 2/5] RUN apt-get update   && apt-get install -y --no-install-recommends gcc libc6-dev pkg-config   && rm -rf /var/lib/apt/lists/*
+#16 DONE 86.0s
+
+#49 [rust-toolchain 3/5] RUN set -eux;     arch="$(dpkg --print-architecture)";     case "$arch" in       amd64) rustTarget="x86_64-unknown-linux-gnu"; sha256="4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10" ;;       arm64) rustTarget="aarch64-unknown-linux-gnu"; sha256="9732d6c5e2a098d3521fca8145d826ae0aaa067ef2385ead08e6feac88fa5792" ;;       *) echo "unsupported architecture: $arch" >&2; exit 1 ;;     esac;     curl -fsSLo /tmp/rustup-init "https://static.rust-lang.org/rustup/archive/1.29.0/${rustTarget}/rustup-init";     echo "${sha256}  /tmp/rustup-init" | sha256sum -c -;     chmod +x /tmp/rustup-init;     /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain none;     rm /tmp/rustup-init
+#49 0.283 + dpkg --print-architecture
+#49 0.286 + arch=amd64
+#49 0.287 + rustTarget=x86_64-unknown-linux-gnu
+#49 0.288 + sha256=4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10
+#49 0.289 + curl -fsSLo /tmp/rustup-init https://static.rust-lang.org/rustup/archive/1.29.0/x86_64-unknown-linux-gnu/rustup-init
+#49 1.142 + echo 4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10  /tmp/rustup-init
+#49 1.147 + sha256sum -c -
+#49 1.173 /tmp/rustup-init: OK
+#49 1.175 + chmod +x /tmp/rustup-init
+#49 1.176 + /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain none
+#49 1.459 warn: It looks like you have an existing rustup settings file at:
+#49 1.459 warn: /usr/local/rustup/settings.toml
+#49 1.459 warn: Rustup will install the default toolchain as specified in the settings file,
+#49 1.459 warn: instead of the one inferred from the default host triple.
+#49 1.903 info: profile set to minimal
+#49 1.903 info: default host triple is x86_64-unknown-linux-gnu
+#49 1.903 
+#49 1.903 info: skipping toolchain installation
+#49 1.903 
+#49 1.903 Rust is installed now. Great!
+#49 1.903 
+#49 1.903 To get started you need Cargo's bin directory (/usr/local/cargo/bin) in your 
+#49 1.903 PATH
+#49 1.904 environment variable. This has not been done automatically.
+#49 1.904 
+#49 1.904 To configure your current shell, you need to source
+#49 1.904 the corresponding env file under /usr/local/cargo.
+#49 1.904 
+#49 1.904 This is usually done by running one of the following (note the leading DOT):
+#49 1.904 . "/usr/local/cargo/env"            # For sh/bash/zsh/ash/dash/pdksh
+#49 1.904 source "/usr/local/cargo/env.fish"  # For fish
+#49 1.904 source "/usr/local/cargo/env.nu"  # For nushell
+#49 1.904 source "/usr/local/cargo/env.tcsh"  # For tcsh
+#49 1.904 . "/usr/local/cargo/env.ps1"        # For pwsh
+#49 1.904 source "/usr/local/cargo/env.xsh"   # For xonsh
+#49 1.905 + rm /tmp/rustup-init
+#49 DONE 6.5s
+
+#48 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#48 85.14 Progress: resolved 1323, reused 0, downloaded 600, added 599
+#48 86.14 Progress: resolved 1323, reused 0, downloaded 662, added 657
+#48 87.14 Progress: resolved 1323, reused 0, downloaded 680, added 673
+#48 88.15 Progress: resolved 1323, reused 0, downloaded 720, added 713
+#48 89.14 Progress: resolved 1323, reused 0, downloaded 753, added 749
+#48 90.15 Progress: resolved 1323, reused 0, downloaded 766, added 757
+#48 91.15 Progress: resolved 1323, reused 0, downloaded 792, added 790
+#48 ...
+
+#50 [rust-toolchain 4/5] COPY packages/paperclip-runner/rust-toolchain.toml /tmp/runner-toolchain/rust-toolchain.toml
+#50 DONE 0.7s
+
+#28 [production 2/7] RUN echo "cli-tools-epoch: "   && npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai @google/gemini-cli@latest @moonshot-ai/kimi-code@latest   && apt-get update   && apt-get install -y --no-install-recommends openssh-client jq   && rm -rf /var/lib/apt/lists/*   && mkdir -p /paperclip   && chown node:node /paperclip
+#28 ...
+
+#51 [rust-toolchain 5/5] RUN cd /tmp/runner-toolchain && rustup show
+#51 0.134 Default host: x86_64-unknown-linux-gnu
+#51 0.134 rustup home:  /usr/local/rustup
+#51 0.134 
+#51 0.136 info: syncing channel updates for 1.97.1-x86_64-unknown-linux-gnu
+#51 0.577 info: latest update on 2026-07-16 for version 1.97.1 (8bab26f4f 2026-07-14)
+#51 0.577 info: downloading 4 components
+#51 ...
+
+#48 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#48 92.15 Progress: resolved 1323, reused 0, downloaded 837, added 837
+#48 93.15 Progress: resolved 1323, reused 0, downloaded 932, added 927
+#48 94.15 Progress: resolved 1323, reused 0, downloaded 948, added 947
+#48 95.15 Progress: resolved 1323, reused 0, downloaded 989, added 983
+#48 96.15 Progress: resolved 1323, reused 0, downloaded 1033, added 1030
+#48 97.15 Progress: resolved 1323, reused 0, downloaded 1036, added 1036
+#48 98.15 Progress: resolved 1323, reused 0, downloaded 1050, added 1047
+#48 99.15 Progress: resolved 1323, reused 0, downloaded 1078, added 1072
+#48 100.2 Progress: resolved 1323, reused 0, downloaded 1085, added 1079
+#48 101.2 Progress: resolved 1323, reused 0, downloaded 1100, added 1093
+#48 ...
+
+#28 [production 2/7] RUN echo "cli-tools-epoch: "   && npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai @google/gemini-cli@latest @moonshot-ai/kimi-code@latest   && apt-get update   && apt-get install -y --no-install-recommends openssh-client jq   && rm -rf /var/lib/apt/lists/*   && mkdir -p /paperclip   && chown node:node /paperclip
+#28 102.6 
+#28 102.6 added 47 packages in 2m
+#28 102.6 
+#28 102.6 4 packages are looking for funding
+#28 102.6   run `npm fund` for details
+#28 102.6 npm warn install-scripts 4 packages have install scripts not yet covered by allowScripts:
+#28 102.6 npm warn install-scripts   @anthropic-ai/claude-code@2.1.310 (postinstall: node install.cjs)
+#28 102.6 npm warn install-scripts   @moonshot-ai/kimi-code@2.3.3 (postinstall: node scripts/postinstall.mjs)
+#28 102.6 npm warn install-scripts   opencode-ai@1.19.4 (postinstall: node ./postinstall.mjs)
+#28 102.6 npm warn install-scripts   @github/keytar@7.10.6 (install: node script/install.js || npm run build)
+#28 102.6 npm warn install-scripts
+#28 102.6 npm warn install-scripts Run `npm install -g --allow-scripts=@anthropic-ai/claude-code,@moonshot-ai/kimi-code,opencode-ai,@github/keytar` to allow these scripts once, or `npm config set allow-scripts=@anthropic-ai/claude-code,@moonshot-ai/kimi-code,opencode-ai,@github/keytar --location=user` to allow them for all global installs.
+#28 102.6 npm notice
+#28 102.6 npm notice New major version of npm available! 11.19.1 -> 12.2.1
+#28 102.6 npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.1
+#28 102.6 npm notice To update run: npm install -g npm@12.2.1
+#28 102.6 npm notice
+#28 105.0 Get:1 http://deb.debian.org/debian trixie InRelease [140 kB]
+#28 105.2 Get:2 http://deb.debian.org/debian trixie-updates InRelease [47.3 kB]
+#28 105.2 Get:3 http://deb.debian.org/debian-security trixie-security InRelease [43.4 kB]
+#28 106.0 Get:4 http://deb.debian.org/debian trixie/main amd64 Packages [9678 kB]
+#28 106.4 Get:5 http://deb.debian.org/debian trixie-updates/main amd64 Packages [720 B]
+#28 106.4 Get:6 http://deb.debian.org/debian-security trixie-security/main amd64 Packages [270 kB]
+#28 107.3 Fetched 10.2 MB in 3s (3849 kB/s)
+#28 107.3 Reading package lists...
+#28 108.8 Reading package lists...
+#28 109.8 Building dependency tree...
+#28 110.1 Reading state information...
+#28 110.7 The following additional packages will be installed:
+#28 110.7   libcbor0.10 libedit2 libfido2-1 libjq1 libonig5
+#28 110.7 Suggested packages:
+#28 110.7   keychain libpam-ssh monkeysphere ssh-askpass
+#28 110.7 Recommended packages:
+#28 110.7   xauth
+#28 111.3 The following NEW packages will be installed:
+#28 111.3   jq libcbor0.10 libedit2 libfido2-1 libjq1 libonig5 openssh-client
+#28 112.2 0 upgraded, 7 newly installed, 0 to remove and 1 not upgraded.
+#28 112.2 Need to get 1627 kB of archives.
+#28 112.2 After this operation, 7023 kB of additional disk space will be used.
+#28 112.2 Get:1 http://deb.debian.org/debian trixie/main amd64 libedit2 amd64 3.1-20250104-1 [93.8 kB]
+#28 112.3 Get:2 http://deb.debian.org/debian trixie/main amd64 libcbor0.10 amd64 0.10.2-2 [28.3 kB]
+#28 112.3 Get:3 http://deb.debian.org/debian trixie/main amd64 libfido2-1 amd64 1.15.0-1+b1 [78.7 kB]
+#28 112.3 Get:4 http://deb.debian.org/debian trixie/main amd64 openssh-client amd64 1:10.0p1-7+deb13u4 [990 kB]
+#28 112.3 Get:5 http://deb.debian.org/debian trixie/main amd64 libonig5 amd64 6.9.9-1+b1 [189 kB]
+#28 112.4 Get:6 http://deb.debian.org/debian-security trixie-security/main amd64 libjq1 amd64 1.7.1-6+deb13u4 [168 kB]
+#28 112.4 Get:7 http://deb.debian.org/debian-security trixie-security/main amd64 jq amd64 1.7.1-6+deb13u4 [78.9 kB]
+#28 ...
+
+#48 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#48 102.2 Progress: resolved 1323, reused 0, downloaded 1109, added 1105
+#48 103.2 Progress: resolved 1323, reused 0, downloaded 1124, added 1119
+#48 104.2 Progress: resolved 1323, reused 0, downloaded 1147, added 1140
+#48 105.2 Progress: resolved 1323, reused 0, downloaded 1176, added 1170
+#48 106.2 Progress: resolved 1323, reused 0, downloaded 1224, added 1217
+#48 107.4 Progress: resolved 1323, reused 0, downloaded 1234, added 1228
+#48 108.4 Progress: resolved 1323, reused 0, downloaded 1241, added 1236
+#48 109.4 Progress: resolved 1323, reused 0, downloaded 1243, added 1238
+#48 110.4 Progress: resolved 1323, reused 0, downloaded 1250, added 1245
+#48 111.4 Progress: resolved 1323, reused 0, downloaded 1256, added 1249
+#48 112.4 Progress: resolved 1323, reused 0, downloaded 1258, added 1252
+#48 113.4 Progress: resolved 1323, reused 0, downloaded 1260, added 1252
+#48 114.4 Progress: resolved 1323, reused 0, downloaded 1272, added 1264
+#48 ...
+
+#28 [production 2/7] RUN echo "cli-tools-epoch: "   && npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai @google/gemini-cli@latest @moonshot-ai/kimi-code@latest   && apt-get update   && apt-get install -y --no-install-recommends openssh-client jq   && rm -rf /var/lib/apt/lists/*   && mkdir -p /paperclip   && chown node:node /paperclip
+#28 116.2 debconf: unable to initialize frontend: Dialog
+#28 116.2 debconf: (TERM is not set, so the dialog frontend is not usable.)
+#28 116.2 debconf: falling back to frontend: Readline
+#28 116.4 debconf: unable to initialize frontend: Readline
+#28 116.4 debconf: (This frontend requires a controlling tty.)
+#28 116.4 debconf: falling back to frontend: Teletype
+#28 116.4 debconf: unable to initialize frontend: Teletype
+#28 116.4 debconf: (This frontend requires a controlling tty.)
+#28 116.4 debconf: falling back to frontend: Noninteractive
+#28 120.8 Fetched 1627 kB in 1s (1794 kB/s)
+#28 ...
+
+#51 [rust-toolchain 5/5] RUN cd /tmp/runner-toolchain && rustup show
+#51 27.86 installed toolchains
+#51 27.86 --------------------
+#51 27.88 
+#51 27.88 active toolchain
+#51 27.88 ----------------
+#51 27.88 name: 1.97.1-x86_64-unknown-linux-gnu
+#51 27.88 active because: overridden by '/tmp/runner-toolchain/rust-toolchain.toml'
+#51 27.88 installed targets:
+#51 27.88   x86_64-unknown-linux-gnu
+#51 ...
+
+#48 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#48 115.4 Progress: resolved 1323, reused 0, downloaded 1286, added 1279
+#48 116.4 Progress: resolved 1323, reused 0, downloaded 1303, added 1294
+#48 117.4 Progress: resolved 1323, reused 0, downloaded 1314, added 1308
+#48 118.4 Progress: resolved 1323, reused 0, downloaded 1315, added 1322
+#48 122.2 Progress: resolved 1323, reused 0, downloaded 1316, added 1322
+#48 122.2 Progress: resolved 1323, reused 0, downloaded 1316, added 1323, done
+#48 ...
+
+#28 [production 2/7] RUN echo "cli-tools-epoch: "   && npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai @google/gemini-cli@latest @moonshot-ai/kimi-code@latest   && apt-get update   && apt-get install -y --no-install-recommends openssh-client jq   && rm -rf /var/lib/apt/lists/*   && mkdir -p /paperclip   && chown node:node /paperclip
+#28 122.4 Selecting previously unselected package libedit2:amd64.
+#28 122.4 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 10325 files and directories currently installed.)
+#28 125.5 Preparing to unpack .../0-libedit2_3.1-20250104-1_amd64.deb ...
+#28 126.8 Unpacking libedit2:amd64 (3.1-20250104-1) ...
+#28 ...
+
+#51 [rust-toolchain 5/5] RUN cd /tmp/runner-toolchain && rustup show
+#51 DONE 34.4s
+
+#28 [production 2/7] RUN echo "cli-tools-epoch: "   && npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai @google/gemini-cli@latest @moonshot-ai/kimi-code@latest   && apt-get update   && apt-get install -y --no-install-recommends openssh-client jq   && rm -rf /var/lib/apt/lists/*   && mkdir -p /paperclip   && chown node:node /paperclip
+#28 127.7 Selecting previously unselected package libcbor0.10:amd64.
+#28 127.7 Preparing to unpack .../1-libcbor0.10_0.10.2-2_amd64.deb ...
+#28 127.7 Unpacking libcbor0.10:amd64 (0.10.2-2) ...
+#28 128.1 Selecting previously unselected package libfido2-1:amd64.
+#28 128.1 Preparing to unpack .../2-libfido2-1_1.15.0-1+b1_amd64.deb ...
+#28 128.1 Unpacking libfido2-1:amd64 (1.15.0-1+b1) ...
+#28 128.5 Selecting previously unselected package openssh-client.
+#28 128.5 Preparing to unpack .../3-openssh-client_1%3a10.0p1-7+deb13u4_amd64.deb ...
+#28 128.7 Unpacking openssh-client (1:10.0p1-7+deb13u4) ...
+#28 129.1 Selecting previously unselected package libonig5:amd64.
+#28 129.1 Preparing to unpack .../4-libonig5_6.9.9-1+b1_amd64.deb ...
+#28 129.2 Unpacking libonig5:amd64 (6.9.9-1+b1) ...
+#28 129.6 Selecting previously unselected package libjq1:amd64.
+#28 129.6 Preparing to unpack .../5-libjq1_1.7.1-6+deb13u4_amd64.deb ...
+#28 129.6 Unpacking libjq1:amd64 (1.7.1-6+deb13u4) ...
+#28 129.7 Selecting previously unselected package jq.
+#28 129.7 Preparing to unpack .../6-jq_1.7.1-6+deb13u4_amd64.deb ...
+#28 129.7 Unpacking jq (1.7.1-6+deb13u4) ...
+#28 129.8 Setting up libcbor0.10:amd64 (0.10.2-2) ...
+#28 129.9 Setting up libedit2:amd64 (3.1-20250104-1) ...
+#28 129.9 Setting up libfido2-1:amd64 (1.15.0-1+b1) ...
+#28 129.9 Setting up libonig5:amd64 (6.9.9-1+b1) ...
+#28 129.9 Setting up libjq1:amd64 (1.7.1-6+deb13u4) ...
+#28 130.0 Setting up openssh-client (1:10.0p1-7+deb13u4) ...
+#28 130.6 Setting up jq (1.7.1-6+deb13u4) ...
+#28 130.6 Processing triggers for libc-bin (2.41-12+deb13u4) ...
+#28 DONE 130.8s
+
+#52 [rust-chef 1/1] RUN cd /tmp/runner-toolchain && cargo install cargo-chef --version 0.1.73 --locked
+#52 2.424     Updating crates.io index
+#52 2.860  Downloading crates ...
+#52 2.952   Downloaded cargo-chef v0.1.73
+#52 3.183   Installing cargo-chef v0.1.73
+#52 3.184 warning: default toolchain implicitly overridden with `1.97.1-x86_64-unknown-linux-gnu` by rustup toolchain file
+#52 3.185   |
+#52 3.185   = help: use `cargo +stable install` if you meant to use the stable toolchain
+#52 3.185   = note: rustup selects the toolchain based on the parent environment and not the environment of the package being installed
+#52 3.189     Updating crates.io index
+#52 ...
+
+#53 [production 3/7] COPY scripts/docker-entrypoint.sh /usr/local/bin/
+#53 DONE 0.5s
+
+#54 [production 4/7] RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+#54 DONE 0.1s
+
+#8 [internal] load build context
+#8 ...
+
+#52 [rust-chef 1/1] RUN cd /tmp/runner-toolchain && cargo install cargo-chef --version 0.1.73 --locked
+#52 3.794     Updating crates.io index
+#52 3.881  Downloading crates ...
+#52 3.894   Downloaded colorchoice v1.0.3
+#52 3.900   Downloaded anstyle v1.0.10
+#52 3.903   Downloaded bitflags v1.3.2
+#52 3.911   Downloaded anyhow v1.0.95
+#52 3.920   Downloaded cargo_metadata v0.15.4
+#52 3.923   Downloaded camino v1.1.9
+#52 3.927   Downloaded humantime v2.1.0
+#52 3.930   Downloaded serde_json v1.0.138
+#52 3.947   Downloaded clap v4.5.27
+#52 3.966   Downloaded crossbeam-deque v0.8.6
+#52 3.969   Downloaded is_terminal_polyfill v1.70.1
+#52 3.971   Downloaded toml_datetime v0.6.8
+#52 3.973   Downloaded utf8parse v0.2.2
+#52 3.975   Downloaded walkdir v2.5.0
+#52 3.978   Downloaded dissimilar v1.0.9
+#52 3.982   Downloaded globset v0.4.15
+#52 3.985   Downloaded cargo-platform v0.1.9
+#52 3.988   Downloaded env_logger v0.10.2
+#52 3.995   Downloaded ignore v0.4.23
+#52 4.000   Downloaded ryu v1.0.19
+#52 4.008   Downloaded serde v1.0.217
+#52 4.015   Downloaded serde_derive v1.0.217
+#52 4.020   Downloaded toml_edit v0.22.22
+#52 4.102   Downloaded anstream v0.6.18
+#52 4.107   Downloaded hashbrown v0.15.2
+#52 4.119   Downloaded cargo-manifest v0.18.1
+#52 4.123   Downloaded syn v2.0.96
+#52 4.150   Downloaded clap_lex v0.7.4
+#52 4.153   Downloaded expect-test v1.5.1
+#52 4.155   Downloaded quote v1.0.38
+#52 4.165   Downloaded regex-automata v0.4.9
+#52 4.200   Downloaded anstyle-parse v0.2.6
+#52 4.204   Downloaded itoa v1.0.14
+#52 4.208   Downloaded crossbeam-epoch v0.9.18
+#52 4.215   Downloaded crossbeam-utils v0.8.21
+#52 4.222   Downloaded equivalent v1.0.1
+#52 4.224   Downloaded fs-err v2.11.0
+#52 4.228   Downloaded indexmap v2.7.1
+#52 4.238   Downloaded once_cell v1.20.2
+#52 4.245   Downloaded semver v1.0.25
+#52 4.250   Downloaded serde_spanned v0.6.8
+#52 4.252   Downloaded thiserror v1.0.69
+#52 4.266   Downloaded thiserror-impl v2.0.11
+#52 4.270   Downloaded toml v0.8.19
+#52 4.280   Downloaded unicode-ident v1.0.16
+#52 4.287   Downloaded autocfg v1.4.0
+#52 4.293   Downloaded heck v0.5.0
+#52 4.296   Downloaded log v0.4.25
+#52 4.307   Downloaded memchr v2.7.4
+#52 4.322   Downloaded regex v1.11.1
+#52 4.351   Downloaded bstr v1.11.3
+#52 4.368   Downloaded regex-syntax v0.8.5
+#52 4.380   Downloaded libc v0.2.169
+#52 4.433   Downloaded thiserror v2.0.11
+#52 4.448   Downloaded globwalk v0.8.1
+#52 4.450   Downloaded pathdiff v0.2.3
+#52 4.453   Downloaded proc-macro2 v1.0.93
+#52 4.458   Downloaded strsim v0.11.1
+#52 4.461   Downloaded anstyle-query v1.1.2
+#52 4.463   Downloaded thiserror-impl v1.0.69
+#52 4.467   Downloaded clap_builder v4.5.27
+#52 4.479   Downloaded aho-corasick v1.1.3
+#52 4.488   Downloaded same-file v1.0.6
+#52 4.491   Downloaded termcolor v1.4.1
+#52 4.493   Downloaded is-terminal v0.4.15
+#52 4.495   Downloaded clap_derive v4.5.24
+#52 4.499   Downloaded winnow v0.6.25
+#52 5.551    Compiling proc-macro2 v1.0.93
+#52 5.551    Compiling unicode-ident v1.0.16
+#52 5.551    Compiling serde v1.0.217
+#52 5.551    Compiling memchr v2.7.4
+#52 7.764    Compiling crossbeam-utils v0.8.21
+#52 8.879    Compiling aho-corasick v1.1.3
+#52 9.064    Compiling regex-syntax v0.8.5
+#52 9.875    Compiling quote v1.0.38
+#52 10.05    Compiling utf8parse v0.2.2
+#52 10.22    Compiling syn v2.0.96
+#52 10.26    Compiling log v0.4.25
+#52 10.60    Compiling hashbrown v0.15.2
+#52 11.26    Compiling regex-automata v0.4.9
+#52 ...
+
+#48 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#48 130.5 .../@embedded-postgres/linux-x64 postinstall$ node scripts/hydrate-symlinks.js
+#48 130.7 .../esbuild@0.28.2/node_modules/esbuild postinstall$ node install.js
+#48 130.8 .../@embedded-postgres/linux-x64 postinstall: Done
+#48 130.8 .../esbuild@0.18.20/node_modules/esbuild postinstall$ node install.js
+#48 130.9 .../esbuild@0.25.12/node_modules/esbuild postinstall$ node install.js
+#48 131.0 .../esbuild@0.28.2/node_modules/esbuild postinstall: Done
+#48 131.7 .../esbuild@0.18.20/node_modules/esbuild postinstall: Done
+#48 131.7 .../node_modules/opencode-ai postinstall$ node ./postinstall.mjs
+#48 132.5 .../esbuild@0.25.12/node_modules/esbuild postinstall: Done
+#48 132.7 .../node_modules/protobufjs postinstall$ node scripts/postinstall
+#48 132.8 .../node_modules/cpu-features install$ node buildcheck.js > buildcheck.gypi && node-gyp rebuild
+#48 132.8 .../node_modules/protobufjs postinstall: Done
+#48 133.0 .../node_modules/cpu-features install: /app/node_modules/.pnpm/buildcheck@0.0.7/node_modules/buildcheck/lib/index.js:115
+#48 133.0 .../node_modules/cpu-features install:   throw new Error('Unable to detect compiler type');
+#48 133.0 .../node_modules/cpu-features install:   ^
+#48 133.0 .../node_modules/cpu-features install: Error: Unable to detect compiler type
+#48 133.0 .../node_modules/cpu-features install:     at BuildEnvironment.getKind (/app/node_modules/.pnpm/buildcheck@0.0.7/node_modules/buildcheck/lib/index.js:115:9)
+#48 133.0 .../node_modules/cpu-features install:     at BuildEnvironment.tryCompile (/app/node_modules/.pnpm/buildcheck@0.0.7/node_modules/buildcheck/lib/index.js:537:15)
+#48 133.0 .../node_modules/cpu-features install:     at BuildEnvironment.checkHeader (/app/node_modules/.pnpm/buildcheck@0.0.7/node_modules/buildcheck/lib/index.js:423:25)
+#48 133.0 .../node_modules/cpu-features install:     at Object.<anonymous> (/app/node_modules/.pnpm/cpu-features@0.0.10/node_modules/cpu-features/buildcheck.js:16:4)
+#48 133.0 .../node_modules/cpu-features install:     at Module._compile (node:internal/modules/cjs/loader:1929:14)
+#48 133.0 .../node_modules/cpu-features install:     at Object..js (node:internal/modules/cjs/loader:2060:10)
+#48 133.0 .../node_modules/cpu-features install:     at Module.load (node:internal/modules/cjs/loader:1651:32)
+#48 133.0 .../node_modules/cpu-features install:     at Module._load (node:internal/modules/cjs/loader:1443:12)
+#48 133.0 .../node_modules/cpu-features install:     at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+#48 133.0 .../node_modules/cpu-features install:     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+#48 133.0 .../node_modules/cpu-features install: Node.js v24.22.1
+#48 133.0 .../node_modules/cpu-features install: Failed
+#48 136.9 .../node_modules/opencode-ai postinstall: Done
+#48 139.4 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install$ node install.js
+#48 139.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info it worked if it ends with ok
+#48 139.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info using node-gyp@10.3.1
+#48 139.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info using node@24.22.1 | linux | x64
+#48 139.9 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info find Python using Python version 3.13.5 found at "/usr/bin/python3"
+#48 140.2 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp http GET https://nodejs.org/download/release/v24.22.1/node-v24.22.1-headers.tar.gz
+#48 140.3 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp http 200 https://nodejs.org/download/release/v24.22.1/node-v24.22.1-headers.tar.gz
+#48 ...
+
+#52 [rust-chef 1/1] RUN cd /tmp/runner-toolchain && cargo install cargo-chef --version 0.1.73 --locked
+#52 14.53    Compiling serde_derive v1.0.217
+#52 17.33    Compiling libc v0.2.169
+#52 17.45    Compiling equivalent v1.0.1
+#52 17.53    Compiling indexmap v2.7.1
+#52 18.78    Compiling anstyle-parse v0.2.6
+#52 19.09    Compiling crossbeam-epoch v0.9.18
+#52 ...
+
+#48 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp http GET https://nodejs.org/download/release/v24.22.1/SHASUMS256.txt
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp http 200 https://nodejs.org/download/release/v24.22.1/SHASUMS256.txt
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn /usr/bin/python3
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args [
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/node-gyp/gyp/gyp_main.py',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args 'binding.gyp',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-f',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args 'make',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-I',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '/app/node_modules/.pnpm/ssh2@1.17.0/node_modules/ssh2/lib/protocol/crypto/build/config.gypi',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-I',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/node-gyp/addon.gypi',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-I',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '/root/.cache/node-gyp/24.22.1/include/node/common.gypi',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dlibrary=shared_library',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dvisibility=default',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dnode_root_dir=/root/.cache/node-gyp/24.22.1',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dnode_gyp_dir=/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/node-gyp',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dnode_lib_file=/root/.cache/node-gyp/24.22.1/<(target_arch)/node.lib',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dmodule_root_dir=/app/node_modules/.pnpm/ssh2@1.17.0/node_modules/ssh2/lib/protocol/crypto',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dnode_engine=v8',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '--depth=.',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '--no-parallel',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '--generator-output',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args 'build',
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Goutput_dir=.'
+#48 142.8 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args ]
+#48 143.1 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! build error 
+#48 143.1 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! stack Error: not found: make
+#48 143.1 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! stack at getNotFoundError (/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/which/lib/index.js:16:17)
+#48 143.1 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! stack at which (/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/which/lib/index.js:77:9)
+#48 143.1 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! stack at async doWhich (/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/node-gyp/lib/build.js:119:22)
+#48 143.1 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! stack at async loadConfigGypi (/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/node-gyp/lib/build.js:78:7)
+#48 143.1 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! stack at async build (/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/node-gyp/lib/build.js:36:3)
+#48 143.1 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! stack at async run (/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/node-gyp/bin/node-gyp.js:81:18)
+#48 143.1 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! System Linux 6.12.114-fly
+#48 143.1 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! command "/usr/local/bin/node" "/root/.cache/node/corepack/v1/pnpm/9.15.4/dist/node_modules/node-gyp/bin/node-gyp.js" "--target=v24.22.1" "--real_openssl_major=3" "rebuild"
+#48 143.1 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! cwd /app/node_modules/.pnpm/ssh2@1.17.0/node_modules/ssh2/lib/protocol/crypto
+#48 143.1 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! node -v v24.22.1
+#48 143.1 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! node-gyp -v v10.3.1
+#48 143.1 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp ERR! not ok 
+#48 143.1 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: Failed to build optional crypto binding
+#48 143.1 .../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: Done
+#48 143.5  WARN  Failed to create bin at /app/packages/plugins/paperclip-plugin-fake-sandbox/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+#48 143.5  WARN  Failed to create bin at /app/packages/plugins/plugin-workspace-diff/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+#48 143.5  WARN  Failed to create bin at /app/packages/plugins/plugin-llm-wiki/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+#48 143.5  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-runner-eval-session. ENOENT: no such file or directory, open '/app/packages/paperclip-runner/dist/cli/eval-session.js'
+#48 143.5  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-runner-codex-proxy. ENOENT: no such file or directory, open '/app/packages/paperclip-runner/dist/cli/codex-app-server-unix-proxy.js'
+#48 143.5  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-runner-acpx-sidecar. ENOENT: no such file or directory, open '/app/packages/paperclip-runner/dist/cli/acpx-runtime-sidecar.js'
+#48 143.5  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-runner-opencode-proxy. ENOENT: no such file or directory, open '/app/packages/paperclip-runner/dist/cli/opencode-app-server-proxy.js'
+#48 143.5  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+#48 143.5  WARN  Failed to create bin at /app/ui/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+#48 ...
+
+#52 [rust-chef 1/1] RUN cd /tmp/runner-toolchain && cargo install cargo-chef --version 0.1.73 --locked
+#52 21.06    Compiling bstr v1.11.3
+#52 21.73    Compiling colorchoice v1.0.3
+#52 21.88    Compiling thiserror v2.0.11
+#52 22.25    Compiling serde_json v1.0.138
+#52 22.43    Compiling autocfg v1.4.0
+#52 22.57    Compiling is_terminal_polyfill v1.70.1
+#52 22.66    Compiling same-file v1.0.6
+#52 22.83    Compiling anstyle v1.0.10
+#52 22.91    Compiling semver v1.0.25
+#52 23.18    Compiling camino v1.1.9
+#52 23.20    Compiling thiserror v1.0.69
+#52 23.41    Compiling winnow v0.6.25
+#52 23.44    Compiling anstyle-query v1.1.2
+#52 23.54    Compiling anstream v0.6.18
+#52 ...
+
+#48 [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile
+#48 217.7 Killed
+#48 ERROR: process "/bin/sh -c pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile" did not complete successfully: exit code: 137
+
+#8 [internal] load build context
+#8 ...
+
+#52 [rust-chef 1/1] RUN cd /tmp/runner-toolchain && cargo install cargo-chef --version 0.1.73 --locked
+#52 CANCELED
+------
+ > [deps 36/36] RUN pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile:
+143.5  WARN  Failed to create bin at /app/packages/plugins/paperclip-plugin-fake-sandbox/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+143.5  WARN  Failed to create bin at /app/packages/plugins/plugin-workspace-diff/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+143.5  WARN  Failed to create bin at /app/packages/plugins/plugin-llm-wiki/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+143.5  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-runner-eval-session. ENOENT: no such file or directory, open '/app/packages/paperclip-runner/dist/cli/eval-session.js'
+143.5  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-runner-codex-proxy. ENOENT: no such file or directory, open '/app/packages/paperclip-runner/dist/cli/codex-app-server-unix-proxy.js'
+143.5  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-runner-acpx-sidecar. ENOENT: no such file or directory, open '/app/packages/paperclip-runner/dist/cli/acpx-runtime-sidecar.js'
+143.5  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-runner-opencode-proxy. ENOENT: no such file or directory, open '/app/packages/paperclip-runner/dist/cli/opencode-app-server-proxy.js'
+143.5  WARN  Failed to create bin at /app/server/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+143.5  WARN  Failed to create bin at /app/ui/node_modules/.bin/paperclip-plugin-dev-server. ENOENT: no such file or directory, open '/app/packages/plugins/sdk/dist/dev-cli.js'
+217.7 Killed
+------
+Error: failed to fetch an image or build from source: error building: failed to solve: process "/bin/sh -c pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile && pnpm install --frozen-lockfile" did not complete successfully: exit code: 137

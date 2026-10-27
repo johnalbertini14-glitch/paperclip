@@ -18,8 +18,9 @@
  *   --source           session source tag for filtering
  */
 
-import fs from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 
 import type {
   AdapterExecutionContext,
@@ -438,7 +439,23 @@ export async function execute(
   // ── Build command args ─────────────────────────────────────────────────
   // Use -Q (quiet) to get clean output: just response + session_id line
   const useQuiet = cfgBoolean(config.quiet) === true; // default false
-  const args: string[] = ["chat", "-q", prompt];
+  const maxSafeQueryArgBytes = 96 * 1024;
+  let promptTempDir: string | null = null;
+  const args: string[] = ["chat"];
+  if (Buffer.byteLength(prompt, "utf8") > maxSafeQueryArgBytes) {
+    promptTempDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-hermes-prompt-"));
+    try {
+      const promptPath = path.join(promptTempDir, "query.txt");
+      await fs.writeFile(promptPath, prompt, { encoding: "utf8", mode: 0o600 });
+      args.push("--query-file", promptPath);
+    } catch (error) {
+      await fs.rm(promptTempDir, { recursive: true, force: true });
+      throw error;
+    }
+    await ctx.onLog("stdout", `[hermes] Prompt exceeds safe argv size; using protected query file (${Buffer.byteLength(prompt, "utf8")} bytes)\n`);
+  } else {
+    args.push("-q", prompt);
+  }
   if (useQuiet) args.push("-Q");
 
   if (model) {
@@ -565,14 +582,19 @@ export async function execute(
     return ctx.onLog(stream, chunk);
   };
 
-  const result = await runChildProcess(ctx.runId, hermesCmd, args, {
-    cwd,
-    env,
-    timeoutSec,
-    graceSec,
-    onLog: wrappedOnLog,
-    onSpawn: ctx.onSpawn,
-  });
+  let result;
+  try {
+    result = await runChildProcess(ctx.runId, hermesCmd, args, {
+      cwd,
+      env,
+      timeoutSec,
+      graceSec,
+      onLog: wrappedOnLog,
+      onSpawn: ctx.onSpawn,
+    });
+  } finally {
+    if (promptTempDir) await fs.rm(promptTempDir, { recursive: true, force: true });
+  }
 
   // ── Parse output ───────────────────────────────────────────────────────
   const parsed = parseHermesOutput(result.stdout || "", result.stderr || "");

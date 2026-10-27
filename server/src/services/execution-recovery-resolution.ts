@@ -1,12 +1,14 @@
 import { hasWorkspaceRestoreFailure } from "@paperclipai/shared";
 import { randomUUID } from "node:crypto";
 import { claimedAdapterType, conversationRecoveryActionPredicate, getConversationOwnershipBlocker } from "./conversation-continuation.js";
+import { canonicalExecutionUuid } from "./execution-identity.js";
 import { persistActivity } from "./activity-log.js";
 import { appendHeartbeatRunEvent } from "./heartbeat-run-events.js";
 import { logger } from "../middleware/logger.js";
 import { and, eq, inArray, isNull, not, or, sql } from "drizzle-orm";
 import {
   chatActions,
+  agents,
   environmentLeases,
   heartbeatRuns,
   issueRecoveryActions,
@@ -35,8 +37,10 @@ export async function validateExecutionReconciliation(input: {
   decision: ExecutionReconciliation | undefined;
   /** Board-only source repair: never authorize a continuation of this run. */
   workspaceRepairOnly?: boolean;
+  /** Internal context from the Board-authenticated settled-action route only. */
+  boardHandback?: { actionId: string; currentOwnerAgentId: string; sourceAgentId: string };
 }) {
-  const { db, companyId, issueId, agentId, decision } = input;
+  const { db, companyId, issueId, agentId, decision, boardHandback } = input;
   if (!decision || decision.runId !== input.sourceRunId || (!agentId && !input.workspaceRepairOnly)) {
     throw conflict(
       "Reconcile the recorded execution and its action outcomes before continuing this task.",
@@ -65,11 +69,38 @@ export async function validateExecutionReconciliation(input: {
     review.currentParticipant.agentId === run?.agentId;
   const retainedWorkspace = hasRequiredWorkspaceRecovery(run?.resultJson);
   const repairOnly = input.workspaceRepairOnly === true && retainedWorkspace;
+  let validHandback = false;
+  if (boardHandback) {
+    const [action] = await db.select().from(issueRecoveryActions).where(and(
+      eq(issueRecoveryActions.companyId, companyId),
+      eq(issueRecoveryActions.id, boardHandback.actionId),
+      eq(issueRecoveryActions.sourceIssueId, issueId),
+    ));
+    const [sourceAgent] = run?.agentId ? await db.select().from(agents).where(and(
+      eq(agents.companyId, companyId), eq(agents.id, run.agentId),
+    )) : [];
+    const [currentOwner] = await db.select().from(agents).where(and(
+      eq(agents.companyId, companyId), eq(agents.id, boardHandback.currentOwnerAgentId),
+    ));
+    validHandback = Boolean(
+      !repairOnly && task?.status === "todo" && task.assigneeAgentId === boardHandback.currentOwnerAgentId &&
+      agentId === boardHandback.currentOwnerAgentId && run &&
+      run.agentId === boardHandback.sourceAgentId && run.agentId !== boardHandback.currentOwnerAgentId &&
+      sourceAgent?.companyId === companyId && currentOwner?.companyId === companyId &&
+      currentOwner.role === "cto" && action?.ownerType === "board" &&
+      action.returnOwnerAgentId === boardHandback.sourceAgentId && action.evidence.runId === run.id &&
+      EXECUTION_RECONCILIATION_CAUSES.includes(action.cause as (typeof EXECUTION_RECONCILIATION_CAUSES)[number]) &&
+      (action.evidence.automaticRecovery as { replay?: string } | undefined)?.replay === "blocked" &&
+      ["active", "resolved"].includes(action.status) &&
+      (action.status !== "resolved" || action.outcome === "blocked")
+    );
+  }
   if (
+    (boardHandback && !validHandback) ||
     (input.workspaceRepairOnly && !retainedWorkspace) ||
     !run ||
     !task ||
-    (!repairOnly && (task.assigneeAgentId !== agentId || (run.agentId !== agentId && !isCurrentReviewer))) ||
+    (!repairOnly && !validHandback && (task.assigneeAgentId !== agentId || (run.agentId !== agentId && !isCurrentReviewer))) ||
     (run.nativeIssueId ?? run.contextSnapshot?.issueId) !== issueId ||
     !["failed", "interrupted", "timed_out", "cancelled"].includes(run.status)
   ) {
@@ -165,15 +196,35 @@ export async function markExecutionReconciliation(
   db: Db,
   action: Pick<
     typeof issueRecoveryActions.$inferSelect,
-    "companyId" | "id" | "evidence" | "sourceIssueId"
+    "companyId" | "id" | "evidence" | "sourceIssueId" | "ownerType" | "returnOwnerAgentId"
   >,
   decision: ExecutionReconciliation,
   actorId: string,
   deliveryOwner?: { kind: "chat_failed_run_retry"; actionId: string },
-  options?: { workspaceRepairOnly?: boolean },
+  options?: {
+    workspaceRepairOnly?: boolean;
+    boardHandback?: { actionId: string; currentOwnerAgentId: string; sourceAgentId: string };
+  },
 ) {
   if (options?.workspaceRepairOnly && (deliveryOwner || !hasRequiredWorkspaceRecovery(action.evidence))) {
     throw conflict("Workspace repair must target the retained source without a continuation owner.");
+  }
+  const handback = options?.boardHandback;
+  if (handback) {
+    const [task] = await db.select().from(issues).where(and(
+      eq(issues.companyId, action.companyId), eq(issues.id, action.sourceIssueId),
+    ));
+    const [owner] = await db.select().from(agents).where(and(
+      eq(agents.companyId, action.companyId), eq(agents.id, handback.currentOwnerAgentId),
+    ));
+    if (action.id !== handback.actionId || action.ownerType !== "board" ||
+      action.returnOwnerAgentId !== handback.sourceAgentId ||
+      action.evidence.runId !== decision.runId ||
+      (action.evidence.automaticRecovery as { replay?: string } | undefined)?.replay !== "blocked" ||
+      task?.status !== "todo" || task.assigneeAgentId !== handback.currentOwnerAgentId ||
+      owner?.role !== "cto" || deliveryOwner || options?.workspaceRepairOnly) {
+      throw conflict("The Board execution handback no longer matches its locked source, task owner, or delivery target.");
+    }
   }
   if (deliveryOwner) {
     const [retry] = await db
@@ -211,6 +262,7 @@ export async function markExecutionReconciliation(
   await db
     .update(issueRecoveryActions)
     .set({
+      ...(handback ? { returnOwnerAgentId: handback.currentOwnerAgentId } : {}),
       evidence: {
         ...action.evidence,
         automaticRecovery: undefined,
@@ -389,10 +441,10 @@ export async function settleUnrecoverableExecutions(
     .select({ action: issueRecoveryActions })
     .from(issueRecoveryActions)
     .innerJoin(
-      heartbeatRuns,
+      // Force indexed lookup from a guarded run UUID, not a broad text cast.
+      sql`lateral (select * from ${heartbeatRuns} where ${heartbeatRuns.id} = ${canonicalExecutionUuid(sql`${issueRecoveryActions.evidence}->>'runId'`)} offset 0) "heartbeat_runs"`,
       and(
         eq(heartbeatRuns.companyId, issueRecoveryActions.companyId),
-        sql`${heartbeatRuns.id}::text = ${issueRecoveryActions.evidence}->>'runId'`,
         sql`coalesce(${heartbeatRuns.nativeIssueId}::text, ${heartbeatRuns.contextSnapshot}->>'issueId') = ${issueRecoveryActions.sourceIssueId}::text`,
       ),
     )
