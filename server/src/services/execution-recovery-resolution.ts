@@ -7,6 +7,7 @@ import { logger } from "../middleware/logger.js";
 import { and, eq, inArray, isNull, not, or, sql } from "drizzle-orm";
 import {
   chatActions,
+  agents,
   environmentLeases,
   heartbeatRuns,
   issueRecoveryActions,
@@ -31,8 +32,14 @@ export async function validateExecutionReconciliation(input: {
   agentId: string | null;
   sourceRunId: unknown;
   decision: ExecutionReconciliation | undefined;
+  /** Internal context created only by the Board-authenticated settled-action route. */
+  boardHandback?: {
+    actionId: string;
+    currentOwnerAgentId: string;
+    sourceAgentId: string;
+  };
 }) {
-  const { db, companyId, issueId, agentId, decision } = input;
+  const { db, companyId, issueId, agentId, decision, boardHandback } = input;
   if (!decision || decision.runId !== input.sourceRunId || !agentId) {
     throw conflict(
       "Reconcile the recorded execution and its action outcomes before continuing this task.",
@@ -59,11 +66,60 @@ export async function validateExecutionReconciliation(input: {
     review?.status === "pending" &&
     review.currentParticipant?.type === "agent" &&
     review.currentParticipant.agentId === run?.agentId;
+  let isBoardHandback = false;
+  if (boardHandback) {
+    const [action] = await db
+      .select()
+      .from(issueRecoveryActions)
+      .where(
+        and(
+          eq(issueRecoveryActions.companyId, companyId),
+          eq(issueRecoveryActions.id, boardHandback.actionId),
+          eq(issueRecoveryActions.sourceIssueId, issueId),
+        ),
+      );
+    const [sourceAgent] = run?.agentId
+      ? await db.select().from(agents).where(
+          and(eq(agents.companyId, companyId), eq(agents.id, run.agentId)),
+        )
+      : [];
+    const [currentOwner] = await db
+      .select()
+      .from(agents)
+      .where(
+        and(
+          eq(agents.companyId, companyId),
+          eq(agents.id, boardHandback.currentOwnerAgentId),
+        ),
+      );
+    isBoardHandback = Boolean(
+      task?.status === "todo" &&
+      task.assigneeAgentId === boardHandback.currentOwnerAgentId &&
+      agentId === boardHandback.currentOwnerAgentId &&
+      run &&
+      run.agentId === boardHandback.sourceAgentId &&
+      run.agentId !== boardHandback.currentOwnerAgentId &&
+      sourceAgent?.companyId === companyId &&
+      currentOwner?.companyId === companyId &&
+      currentOwner.role === "cto" &&
+      action?.ownerType === "board" &&
+      action.returnOwnerAgentId === boardHandback.sourceAgentId &&
+      action.evidence.runId === run.id &&
+      EXECUTION_RECONCILIATION_CAUSES.includes(
+        action.cause as (typeof EXECUTION_RECONCILIATION_CAUSES)[number],
+      ) &&
+      (action.evidence.automaticRecovery as { replay?: string } | undefined)?.replay === "blocked" &&
+      ["active", "resolved"].includes(action.status) &&
+      (action.status !== "resolved" || action.outcome === "blocked")
+    );
+  }
   if (
+    (boardHandback && !isBoardHandback) ||
     !run ||
     !task ||
-    task.assigneeAgentId !== agentId ||
-    (run.agentId !== agentId && !isCurrentReviewer) ||
+    (!isBoardHandback &&
+      (task.assigneeAgentId !== agentId ||
+        (run.agentId !== agentId && !isCurrentReviewer))) ||
     (run.nativeIssueId ?? run.contextSnapshot?.issueId) !== issueId ||
     !["failed", "interrupted", "timed_out", "cancelled"].includes(run.status)
   ) {
@@ -137,12 +193,41 @@ export async function markExecutionReconciliation(
   db: Db,
   action: Pick<
     typeof issueRecoveryActions.$inferSelect,
-    "companyId" | "id" | "evidence" | "sourceIssueId"
+    "companyId" | "id" | "evidence" | "sourceIssueId" | "ownerType" | "returnOwnerAgentId"
   >,
   decision: ExecutionReconciliation,
   actorId: string,
   deliveryOwner?: { kind: "chat_failed_run_retry"; actionId: string },
+  options?: {
+    boardHandback?: {
+      actionId: string;
+      currentOwnerAgentId: string;
+      sourceAgentId: string;
+    };
+  },
 ) {
+  const handback = options?.boardHandback;
+  if (handback) {
+    const [task] = await db.select().from(issues).where(
+      and(eq(issues.companyId, action.companyId), eq(issues.id, action.sourceIssueId)),
+    );
+    const [owner] = await db.select().from(agents).where(
+      and(eq(agents.companyId, action.companyId), eq(agents.id, handback.currentOwnerAgentId)),
+    );
+    if (
+      action.id !== handback.actionId ||
+      action.ownerType !== "board" ||
+      action.returnOwnerAgentId !== handback.sourceAgentId ||
+      action.evidence.runId !== decision.runId ||
+      (action.evidence.automaticRecovery as { replay?: string } | undefined)?.replay !== "blocked" ||
+      task?.status !== "todo" ||
+      task.assigneeAgentId !== handback.currentOwnerAgentId ||
+      owner?.role !== "cto" ||
+      deliveryOwner
+    ) {
+      throw conflict("The Board execution handback no longer matches its locked source, task owner, or delivery target.");
+    }
+  }
   if (deliveryOwner) {
     const [retry] = await db
       .select()
@@ -179,6 +264,7 @@ export async function markExecutionReconciliation(
   await db
     .update(issueRecoveryActions)
     .set({
+      ...(handback ? { returnOwnerAgentId: handback.currentOwnerAgentId } : {}),
       evidence: {
         ...action.evidence,
         automaticRecovery: undefined,
