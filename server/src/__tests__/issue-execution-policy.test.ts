@@ -260,6 +260,43 @@ describe("issue execution policy transitions", () => {
       });
     });
 
+    it("records the typed approval and skips a next-stage self-review", () => {
+      const policy = makePolicy([
+        { type: "review", participants: [{ type: "agent", agentId: qaAgentId }] },
+        { type: "review", participants: [{ type: "agent", agentId: coderAgentId }] },
+      ]);
+      const result = applyIssueExecutionPolicyTransition({
+        issue: {
+          status: "in_review",
+          assigneeAgentId: qaAgentId,
+          assigneeUserId: null,
+          executionPolicy: policy,
+          executionState: {
+            status: "pending",
+            currentStageId: policy.stages[0].id,
+            currentStageIndex: 0,
+            currentStageType: "review",
+            currentParticipant: { type: "agent", agentId: qaAgentId },
+            returnAssignee: { type: "agent", agentId: coderAgentId },
+            completedStageIds: [],
+            lastDecisionId: null,
+            lastDecisionOutcome: null,
+          },
+        },
+        policy,
+        requestedStatus: "done",
+        requestedAssigneePatch: {},
+        actor: { agentId: qaAgentId },
+        commentBody: "Reviewed candidate",
+      });
+      expect(result.decision).toMatchObject({ stageId: policy.stages[0].id, outcome: "approved" });
+      expect(result.patch.executionState).toMatchObject({
+        status: "completed",
+        completedStageIds: [policy.stages[0].id, policy.stages[1].id],
+        currentParticipant: null,
+      });
+    });
+
     it("reviewer approves → advances to approval stage", () => {
       const reviewStageId = policy.stages[0].id;
       const result = applyIssueExecutionPolicyTransition({

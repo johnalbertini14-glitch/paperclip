@@ -85,6 +85,10 @@ export type AttentionSortMode = "activity" | "decide";
 export interface AttentionFeedQuery {
   includeDismissed?: boolean;
   archived?: boolean;
+  /** Narrow the ranked feed before pagination to one native source kind. */
+  sourceKind?: AttentionSourceKind;
+  /** Narrow before pagination to any of these native source kinds. Cannot combine with sourceKind. */
+  sourceKinds?: AttentionSourceKind[];
   /** Return the complete filtered snapshot in one response. */
   all?: boolean;
   activitySince?: string;

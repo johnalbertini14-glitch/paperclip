@@ -1,0 +1,56 @@
+name: Hotpatch UI performance server build
+on:
+  workflow_dispatch:
+  push:
+    branches: [hotpatch-ui-perf-20261029]
+    paths:
+      - '.github/workflows/hotpatch-ui-perf.yml'
+      - 'server/**'
+      - 'packages/**'
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+permissions:
+  contents: read
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build and typecheck server
+        run: |
+          pnpm --filter @paperclipai/server build
+          pnpm --filter @paperclipai/server typecheck
+      - name: U2, route, and review-policy suites
+        run: >-
+          pnpm exec vitest run
+          server/src/__tests__/attention-service.test.ts
+          server/src/__tests__/dashboard-service.test.ts
+          server/src/services/attention-null-key-scope.test.ts
+          server/src/__tests__/issue-list-assignee-filter-routes.test.ts
+          server/src/__tests__/issue-execution-policy.test.ts
+          --reporter=dot
+      - name: Artifact manifest
+        run: |
+          cd server
+          find dist -type f -print0 | sort -z | xargs -0 sha256sum > dist-sha256.txt
+          sha256sum dist-sha256.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: server-dist-${{ github.sha }}
+          path: |
+            server/dist/
+            server/dist-sha256.txt
+          if-no-files-found: warn
+          retention-days: 7

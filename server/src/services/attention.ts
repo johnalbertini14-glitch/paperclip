@@ -1690,21 +1690,22 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
       const hasUnresolvedFailedKey = failedIssueIds.some((id) => id === null);
       const failedRunKeyScope = or(
         failedIssueIdValues.length > 0 ? inArray(failedRunIssueId, failedIssueIdValues) : undefined,
-        failedIssueIdValues.length > 0 ? inArray(failedRunTaskId, failedIssueIdValues) : undefined,
+        failedIssueIdValues.length > 0 ? and(sql`${failedRunIssueId} is null`, inArray(failedRunTaskId, failedIssueIdValues)) : undefined,
         hasUnresolvedFailedKey
           ? sql`(${failedRunIssueId} = '' or (${failedRunIssueId} is null and (${failedRunTaskId} is null or ${failedRunTaskId} = '')))`
           : undefined,
       );
+      // Keep the latest matching timestamp per resolved key in PostgreSQL.
+      // A long retry history must not transfer every run to the API process.
+      // An explicitly empty issueId does not fall back to taskId.
+      const resolvedRunKey = sql<string | null>`case when ${failedRunIssueId} is not null then nullif(${failedRunIssueId}, '') else nullif(${failedRunTaskId}, '') end`;
       const newerRunsQuery =
         oldestFailedRunCreatedAt && failedAgentIds.length > 0
           ? db
             .select({
               agentId: heartbeatRuns.agentId,
-              createdAt: heartbeatRuns.createdAt,
-              // Project just the ids readRunIssueId needs; pulling the whole
-              // context_snapshot detoasts megabytes per feed build.
-              runIssueId: failedRunIssueId,
-              runTaskId: failedRunTaskId,
+              runKey: resolvedRunKey,
+              createdAt: sql<Date>`max(${heartbeatRuns.createdAt})`.mapWith(heartbeatRuns.createdAt),
             })
             .from(heartbeatRuns)
             .where(and(
@@ -1713,6 +1714,7 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
               gt(heartbeatRuns.createdAt, oldestFailedRunCreatedAt),
               failedRunKeyScope,
             ))
+            .groupBy(heartbeatRuns.agentId, resolvedRunKey)
           : null;
       const [failedIssueMap, failedImageMap, newerRuns] = await Promise.all([
         issueSummaryMap(
@@ -1725,8 +1727,7 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
       ]);
       const latestRunCreatedAtByKey = new Map<string, Date>();
       for (const newerRun of newerRuns) {
-        const newerRunIssueId = readRunIssueId({ issueId: newerRun.runIssueId, taskId: newerRun.runTaskId });
-        const newerRunKey = `${newerRun.agentId}:${newerRunIssueId ?? ""}`;
+        const newerRunKey = `${newerRun.agentId}:${newerRun.runKey ?? ""}`;
         const latestCreatedAt = latestRunCreatedAtByKey.get(newerRunKey);
         if (!latestCreatedAt || newerRun.createdAt > latestCreatedAt) {
           latestRunCreatedAtByKey.set(newerRunKey, newerRun.createdAt);
@@ -1915,6 +1916,8 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
         if (activitySince != null && activity < activitySince) return false;
         if (activityUntil != null && activity > activityUntil) return false;
         if (queueKey && !item.queues.some((queue) => queue.key === queueKey)) return false;
+        if (options.sourceKind && item.sourceKind !== options.sourceKind) return false;
+        if (options.sourceKinds && !options.sourceKinds.includes(item.sourceKind)) return false;
         return true;
       });
 

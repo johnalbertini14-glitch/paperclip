@@ -2026,6 +2026,50 @@ describeEmbeddedPostgres("attention service", () => {
       runId: null,
     };
 
+    await db.insert(approvals).values(Array.from({ length: 55 }, (_, index) => ({
+      id: randomUUID(),
+      companyId,
+      type: "hire_agent",
+      status: "pending" as const,
+      payload: { title: `Source page ${index}` },
+      createdAt: new Date(Date.UTC(2026, 7, 2, 12, 0, index)),
+      updatedAt: new Date(Date.UTC(2026, 7, 2, 12, 0, index)),
+    })));
+    const sourcePath = `/api/companies/${companyId}/attention?sourceKind=approval&limit=50`;
+    const firstSourcePage = await request(app(board)).get(sourcePath).expect(200);
+    expect(firstSourcePage.body.totalCount).toBe(55);
+    expect(firstSourcePage.body.items).toHaveLength(50);
+    expect(firstSourcePage.body.items.every((item: { sourceKind: string }) => item.sourceKind === "approval")).toBe(true);
+    const secondSourcePage = await request(app(board))
+      .get(`${sourcePath}&cursor=${encodeURIComponent(firstSourcePage.body.nextCursor)}`).expect(200);
+    expect(secondSourcePage.body.items).toHaveLength(5);
+    expect(secondSourcePage.body.nextCursor).toBeNull();
+    const allSourcePage = await request(app(board))
+      .get(`/api/companies/${companyId}/attention?includeDismissed=true&all=true`).expect(200);
+    const sourceKinds = [...new Set(allSourcePage.body.items.map((item: { sourceKind: string }) => item.sourceKind))] as string[];
+    expect(sourceKinds.length).toBeGreaterThan(1);
+    const multiPath = `/api/companies/${companyId}/attention?sourceKinds=${sourceKinds.join(",")}&limit=50`;
+    const firstMultiPage = await request(app(board)).get(multiPath).expect(200);
+    expect(firstMultiPage.body.totalCount).toBe(allSourcePage.body.totalCount);
+    expect(firstMultiPage.body.items).toHaveLength(50);
+    const lastMultiPage = await request(app(board))
+      .get(`${multiPath}&cursor=${encodeURIComponent(firstMultiPage.body.nextCursor)}`).expect(200);
+    expect(lastMultiPage.body.items.length).toBe(allSourcePage.body.totalCount - 50);
+    expect(lastMultiPage.body.nextCursor).toBeNull();
+    const selectedKinds = ["approval", "review"];
+    const selectedCount = allSourcePage.body.items.filter((item: { sourceKind: string }) => selectedKinds.includes(item.sourceKind)).length;
+    const selectedPage = await request(app(board))
+      .get(`/api/companies/${companyId}/attention?sourceKinds=${selectedKinds.join(",")}&limit=50`).expect(200);
+    expect(selectedPage.body.totalCount).toBe(selectedCount);
+    expect(selectedPage.body.items.every((item: { sourceKind: string }) => selectedKinds.includes(item.sourceKind))).toBe(true);
+    await request(app(board)).get(`/api/companies/${companyId}/attention?sourceKinds=approval,invalid`).expect(400);
+    await request(app(board)).get(`/api/companies/${companyId}/attention?sourceKinds=approval,`).expect(400);
+    await request(app(board)).get(`/api/companies/${companyId}/attention?sourceKinds=approval&sourceKind=approval`).expect(400);
+    await request(app(board))
+      .get(`/api/companies/${companyId}/attention?sourceKind=invalid`).expect(400);
+    await request(app(agent))
+      .get(sourcePath).expect(403);
+
     await request(app(board)).get(`/api/companies/${companyId}/attention`).expect(200);
     const completeFeed = await request(app(board))
       .get(`/api/companies/${companyId}/attention?includeDismissed=true&all=true`)

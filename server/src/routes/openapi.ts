@@ -5555,6 +5555,8 @@ registry.registerPath({
       activitySince: z.string().datetime().optional(),
       activityUntil: z.string().datetime().optional(),
       queue: z.string().min(1).optional(),
+      sourceKind: decisionAttentionSourceKindSchema.optional(),
+      sourceKinds: z.string().min(1).optional(),
       sort: z.enum(["activity", "decide"]).optional(),
       cursor: z.string().min(1).optional(),
       limit: z.coerce.number().int().min(1).max(100).optional(),

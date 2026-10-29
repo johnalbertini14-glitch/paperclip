@@ -8,7 +8,7 @@ import { queuedInteractionId, readQueuedInteractionResponse, hasQueuedInteractio
 import { deliverConversationComments, isConversation } from "../services/agent-conversations.js";
 import { issueRecoveryActionReadModel } from "../services/issue-recovery-actions.js";
 import { getExecutionBlocker } from "../services/execution-blocker.js";
-import { requiresExecutionReconciliation } from "@paperclipai/shared";
+import { EXECUTION_RECONCILIATION_CAUSES, requiresExecutionReconciliation } from "@paperclipai/shared";
 import {
   validateExecutionReconciliation,
   markExecutionReconciliation,
@@ -111,6 +111,7 @@ import {
   isMarkdownArtifactWorkProduct,
   isMarkdownAttachmentContent,
   isUuidLike,
+  ISSUE_PRIORITIES,
   normalizeIssueIdentifier as normalizeIssueReferenceIdentifier,
   type CompactIssue,
   type CompanySearchExtractQuery,
@@ -7903,11 +7904,46 @@ export function issueRoutes(
         ? ISSUE_LIST_DEFAULT_LIMIT
         : clampIssueListLimit(parsedLimit);
     const rawOffset = req.query.offset as string | undefined;
+    const rawPriorities = req.query.priorities;
+    const rawCreatedByAny = req.query.createdByAny;
+    const createdByAny = typeof rawCreatedByAny === "string"
+      ? rawCreatedByAny.split(",").map((value) => value.trim())
+      : undefined;
+    const rawAssigneeAny = req.query.assigneeAny;
+    const assigneeAny = typeof rawAssigneeAny === "string"
+      ? rawAssigneeAny.split(",").map((value) => value.trim())
+      : undefined;
+    const rawProjectIds = req.query.projectIds;
+    const projectIds = typeof rawProjectIds === "string"
+      ? rawProjectIds.split(",").map((value) => value.trim())
+      : undefined;
+    const rawWorkspaceIds = req.query.workspaceIds;
+    const workspaceIds = typeof rawWorkspaceIds === "string"
+      ? rawWorkspaceIds.split(",").map((value) => value.trim())
+      : undefined;
+    const rawLabelIds = req.query.labelIds;
+    const labelIds = typeof rawLabelIds === "string"
+      ? rawLabelIds.split(",").map((value) => value.trim())
+      : undefined;
+    const rawExternalObjectStatuses = req.query.externalObjectStatuses;
+    const externalObjectStatuses = typeof rawExternalObjectStatuses === "string"
+      ? rawExternalObjectStatuses.split(",").map((value) => value.trim())
+      : undefined;
+    const unassignedBoth = parseOptionalBooleanQuery(req.query.unassignedBoth);
+    const liveOnly = parseOptionalBooleanQuery(req.query.liveOnly);
+    const priorities = typeof rawPriorities === "string"
+      ? rawPriorities.split(",").map((value) => value.trim())
+      : undefined;
     const parsedOffset =
       rawOffset !== undefined && /^\d+$/.test(rawOffset)
         ? Number.parseInt(rawOffset, 10)
         : null;
     const attention = req.query.attention as string | undefined;
+    const dashboardKind = req.query.dashboardKind;
+    if (dashboardKind !== undefined && ((dashboardKind !== "recovery" && dashboardKind !== "blocked" && dashboardKind !== "decision") || attention !== "blocked" || req.actor.type !== "board")) {
+      res.status(400).json({ error: "dashboardKind requires Board attention=blocked and kind=recovery, blocked or decision" });
+      return;
+    }
     const sortField = req.query.sortField as string | undefined;
     const sortDir = req.query.sortDir as string | undefined;
     const view = req.query.view as string | undefined;
@@ -8000,6 +8036,82 @@ export function issueRoutes(
         .json({ error: "sortDir must be 'asc' or 'desc' when provided" });
       return;
     }
+    if (rawPriorities !== undefined && (
+      !priorities || priorities.some((value) =>
+        !ISSUE_PRIORITIES.includes(value as (typeof ISSUE_PRIORITIES)[number])
+      )
+    )) {
+      res.status(400).json({ error: "priorities must be a comma-separated list of issue priorities" });
+      return;
+    }
+    if (rawCreatedByAny !== undefined && (
+      !createdByAny || createdByAny.length > 50
+      || createdByAny.some((value) => value !== "user:me" && (!/^(agent|user):[0-9a-f-]+$/i.test(value) || !isUuidLike(value.split(":")[1] ?? "")))
+    )) {
+      res.status(400).json({ error: "createdByAny must contain up to 50 typed agent/user UUIDs or user:me" });
+      return;
+    }
+    if (createdByAny?.includes("user:me")) {
+      if (req.actor.type !== "board" || !req.actor.userId) {
+        res.status(403).json({ error: "createdByAny=user:me requires board authentication" });
+        return;
+      }
+      for (const [index, value] of createdByAny.entries()) {
+        if (value === "user:me") createdByAny[index] = `user:${req.actor.userId}`;
+      }
+    }
+    if (rawAssigneeAny !== undefined && (
+      !assigneeAny || assigneeAny.length > 50
+      || assigneeAny.some((value) => value !== "unassigned" && value !== "user:me"
+        && (!/^(agent|user):[0-9a-f-]+$/i.test(value) || !isUuidLike(value.split(":")[1] ?? "")))
+    )) {
+      res.status(400).json({ error: "assigneeAny must contain up to 50 typed agent/user UUIDs, user:me or unassigned" });
+      return;
+    }
+    if (assigneeAny?.includes("user:me")) {
+      if (req.actor.type !== "board" || !req.actor.userId) {
+        res.status(403).json({ error: "assigneeAny=user:me requires board authentication" });
+        return;
+      }
+      for (const [index, value] of assigneeAny.entries()) {
+        if (value === "user:me") assigneeAny[index] = `user:${req.actor.userId}`;
+      }
+    }
+    if (rawProjectIds !== undefined && (
+      !projectIds || projectIds.length > 50 || projectIds.some((id) => !isUuidLike(id))
+    )) {
+      res.status(400).json({ error: "projectIds must be a comma-separated list of up to 50 UUIDs" });
+      return;
+    }
+    if (rawWorkspaceIds !== undefined && (
+      !workspaceIds || workspaceIds.length > 50 || workspaceIds.some((id) => !isUuidLike(id))
+    )) {
+      res.status(400).json({ error: "workspaceIds must be a comma-separated list of up to 50 UUIDs" });
+      return;
+    }
+    if (rawLabelIds !== undefined && (
+      !labelIds || labelIds.length > 50 || labelIds.some((id) => !isUuidLike(id))
+    )) {
+      res.status(400).json({ error: "labelIds must be a comma-separated list of up to 50 UUIDs" });
+      return;
+    }
+    if (rawExternalObjectStatuses !== undefined && (
+      !externalObjectStatuses || externalObjectStatuses.length > 7
+      || externalObjectStatuses.some((status) => ![
+        "failed", "waiting", "running", "auth_required", "unreachable", "stale", "none",
+      ].includes(status))
+    )) {
+      res.status(400).json({ error: "externalObjectStatuses must be a comma-separated list of known statuses" });
+      return;
+    }
+    if (unassignedBoth === null) {
+      res.status(400).json({ error: "unassignedBoth must be true or false when provided" });
+      return;
+    }
+    if (liveOnly === null) {
+      res.status(400).json({ error: "liveOnly must be true or false when provided" });
+      return;
+    }
     if (hasPlanDocument === null) {
       res
         .status(400)
@@ -8047,15 +8159,24 @@ export function issueRoutes(
 
     const listFilters: IssueFilters = {
       attention: attention === "blocked" ? "blocked" : undefined,
+      dashboardKind: dashboardKind === "recovery" || dashboardKind === "blocked" || dashboardKind === "decision" ? dashboardKind : undefined,
       status: req.query.status as string | string[] | undefined,
+      priorities,
+      createdByAny,
+      assigneeAny,
       assigneeAgentId,
+      unassignedBoth: unassignedBoth === true,
+      liveOnly: liveOnly === true,
+      externalObjectStatuses,
       participantAgentId: req.query.participantAgentId as string | undefined,
       assigneeUserId,
       touchedByUserId,
       inboxArchivedByUserId,
       unreadForUserId,
       projectId: req.query.projectId as string | undefined,
+      projectIds,
       workspaceId: req.query.workspaceId as string | undefined,
+      workspaceIds,
       executionWorkspaceId: req.query.executionWorkspaceId as
         string | undefined,
       parentId: (req.query.parentId ?? req.query.parentIssueId) as
@@ -8063,6 +8184,7 @@ export function issueRoutes(
       descendantOf: req.query.descendantOf as string | undefined,
       createdFromIssueId: req.query.createdFromIssueId as string | undefined,
       labelId: req.query.labelId as string | undefined,
+      labelIds,
       originKind: req.query.originKind as string | undefined,
       originKindPrefix: req.query.originKindPrefix as string | undefined,
       originId: req.query.originId as string | undefined,
@@ -8111,6 +8233,9 @@ export function issueRoutes(
           ? rawResult
           : await filterIssuesForActor(req, rawResult);
         const issueIds = result.map((issue) => issue.id);
+        const scheduledRetryByIssue = listFilters.attention === "blocked"
+          ? await svc.listCurrentScheduledRetriesForIssues(companyId, issueIds)
+          : new Map();
         if (compactView) {
           const [handoffStates, recoveryActionByIssue] = await Promise.all([
             listSuccessfulRunHandoffStates(db, companyId, issueIds),
@@ -8136,6 +8261,9 @@ export function issueRoutes(
             toCompactIssue({
               ...issue,
               activeRecoveryAction: recoveryActionByIssue.get(issue.id) ?? null,
+              ...(scheduledRetryByIssue.has(issue.id)
+                ? { scheduledRetry: scheduledRetryByIssue.get(issue.id) }
+                : {}),
               successfulRunHandoff: handoffStates.get(issue.id) ?? null,
             }),
           );
@@ -8172,6 +8300,9 @@ export function issueRoutes(
             ...issue,
             successfulRunHandoff: handoffStates.get(issue.id) ?? null,
             activeRecoveryAction: recoveryActionByIssue.get(issue.id) ?? null,
+            ...(scheduledRetryByIssue.has(issue.id)
+              ? { scheduledRetry: scheduledRetryByIssue.get(issue.id) }
+              : {}),
           })),
         };
       },
@@ -8251,13 +8382,147 @@ export function issueRoutes(
       return;
     }
     const attention = req.query.attention as string | undefined;
+    const dashboardKind = req.query.dashboardKind;
+    if (dashboardKind !== undefined && ((dashboardKind !== "recovery" && dashboardKind !== "blocked" && dashboardKind !== "decision") || attention !== "blocked" || req.actor.type !== "board")) {
+      res.status(400).json({ error: "dashboardKind requires Board attention=blocked and kind=recovery, blocked or decision" });
+      return;
+    }
+    const rawPriorities = req.query.priorities;
+    const rawCreatedByAny = req.query.createdByAny;
+    const createdByAny = typeof rawCreatedByAny === "string"
+      ? rawCreatedByAny.split(",").map((value) => value.trim())
+      : undefined;
+    const rawAssigneeAny = req.query.assigneeAny;
+    const assigneeAny = typeof rawAssigneeAny === "string"
+      ? rawAssigneeAny.split(",").map((value) => value.trim())
+      : undefined;
+    const priorities = typeof rawPriorities === "string"
+      ? rawPriorities.split(",").map((value) => value.trim())
+      : undefined;
+    if (rawPriorities !== undefined && (
+      !priorities || priorities.some((value) =>
+        !ISSUE_PRIORITIES.includes(value as (typeof ISSUE_PRIORITIES)[number])
+      )
+    )) {
+      res.status(400).json({ error: "priorities must be a comma-separated list of issue priorities" });
+      return;
+    }
+    const rawProjectIds = req.query.projectIds;
+    const projectIds = typeof rawProjectIds === "string"
+      ? rawProjectIds.split(",").map((value) => value.trim())
+      : undefined;
+    const rawWorkspaceIds = req.query.workspaceIds;
+    const workspaceIds = typeof rawWorkspaceIds === "string"
+      ? rawWorkspaceIds.split(",").map((value) => value.trim())
+      : undefined;
+    const rawLabelIds = req.query.labelIds;
+    const labelIds = typeof rawLabelIds === "string"
+      ? rawLabelIds.split(",").map((value) => value.trim())
+      : undefined;
+    const rawExternalObjectStatuses = req.query.externalObjectStatuses;
+    const externalObjectStatuses = typeof rawExternalObjectStatuses === "string"
+      ? rawExternalObjectStatuses.split(",").map((value) => value.trim())
+      : undefined;
+    if (rawCreatedByAny !== undefined && (
+      !createdByAny || createdByAny.length > 50
+      || createdByAny.some((value) => value !== "user:me" && (!/^(agent|user):[0-9a-f-]+$/i.test(value) || !isUuidLike(value.split(":")[1] ?? "")))
+    )) {
+      res.status(400).json({ error: "createdByAny must contain up to 50 typed agent/user UUIDs or user:me" });
+      return;
+    }
+    if (createdByAny?.includes("user:me")) {
+      if (req.actor.type !== "board" || !req.actor.userId) {
+        res.status(403).json({ error: "createdByAny=user:me requires board authentication" });
+        return;
+      }
+      for (const [index, value] of createdByAny.entries()) {
+        if (value === "user:me") createdByAny[index] = `user:${req.actor.userId}`;
+      }
+    }
+    if (rawAssigneeAny !== undefined && (
+      !assigneeAny || assigneeAny.length > 50
+      || assigneeAny.some((value) => value !== "unassigned" && value !== "user:me"
+        && (!/^(agent|user):[0-9a-f-]+$/i.test(value) || !isUuidLike(value.split(":")[1] ?? "")))
+    )) {
+      res.status(400).json({ error: "assigneeAny must contain up to 50 typed agent/user UUIDs, user:me or unassigned" });
+      return;
+    }
+    if (assigneeAny?.includes("user:me")) {
+      if (req.actor.type !== "board" || !req.actor.userId) {
+        res.status(403).json({ error: "assigneeAny=user:me requires board authentication" });
+        return;
+      }
+      for (const [index, value] of assigneeAny.entries()) {
+        if (value === "user:me") assigneeAny[index] = `user:${req.actor.userId}`;
+      }
+    }
+    if (rawProjectIds !== undefined && (
+      !projectIds || projectIds.length > 50 || projectIds.some((id) => !isUuidLike(id))
+    )) {
+      res.status(400).json({ error: "projectIds must be a comma-separated list of up to 50 UUIDs" });
+      return;
+    }
+    if (rawWorkspaceIds !== undefined && (
+      !workspaceIds || workspaceIds.length > 50 || workspaceIds.some((id) => !isUuidLike(id))
+    )) {
+      res.status(400).json({ error: "workspaceIds must be a comma-separated list of up to 50 UUIDs" });
+      return;
+    }
+    if (rawLabelIds !== undefined && (
+      !labelIds || labelIds.length > 50 || labelIds.some((id) => !isUuidLike(id))
+    )) {
+      res.status(400).json({ error: "labelIds must be a comma-separated list of up to 50 UUIDs" });
+      return;
+    }
+    if (rawExternalObjectStatuses !== undefined && (
+      !externalObjectStatuses || externalObjectStatuses.length > 7
+      || externalObjectStatuses.some((status) => ![
+        "failed", "waiting", "running", "auth_required", "unreachable", "stale", "none",
+      ].includes(status))
+    )) {
+      res.status(400).json({ error: "externalObjectStatuses must be a comma-separated list of known statuses" });
+      return;
+    }
     const hasPlanDocument = parseOptionalBooleanQuery(
       req.query.hasPlanDocument,
     );
-    if (attention !== "blocked") {
-      res
-        .status(400)
-        .json({ error: "issues/count currently requires attention=blocked" });
+    const liveOnly = parseOptionalBooleanQuery(req.query.liveOnly);
+    const unassignedBoth = parseOptionalBooleanQuery(req.query.unassignedBoth);
+    if (attention !== undefined && attention !== "blocked") {
+      res.status(400).json({ error: "attention must be 'blocked' when provided" });
+      return;
+    }
+    if (attention === undefined && req.actor.type !== "board") {
+      res.status(403).json({ error: "Ordinary issue count requires board authentication" });
+      return;
+    }
+    const userFilters = ["assigneeUserId", "touchedByUserId", "inboxArchivedByUserId", "unreadForUserId"] as const;
+    const resolvedUserFilters: Record<(typeof userFilters)[number], string | undefined> = {
+      assigneeUserId: undefined,
+      touchedByUserId: undefined,
+      inboxArchivedByUserId: undefined,
+      unreadForUserId: undefined,
+    };
+    for (const key of userFilters) {
+      const raw = req.query[key];
+      if (raw !== undefined && typeof raw !== "string") {
+        res.status(400).json({ error: `${key} must be a user ID or 'me'` });
+        return;
+      }
+      if (raw === "me" && (req.actor.type !== "board" || !req.actor.userId)) {
+        res.status(403).json({ error: `${key}=me requires board authentication` });
+        return;
+      }
+      resolvedUserFilters[key] = raw === "me" && req.actor.type === "board" ? req.actor.userId : raw;
+    }
+    const rawAssigneeAgentId = req.query.assigneeAgentId;
+    if (rawAssigneeAgentId !== undefined && (typeof rawAssigneeAgentId !== "string" ||
+      (rawAssigneeAgentId.trim() !== "" && rawAssigneeAgentId.toLowerCase() !== "null" && !isUuidLike(rawAssigneeAgentId.trim())))) {
+      res.status(422).json({ error: "assigneeAgentId must be a UUID or 'null'" });
+      return;
+    }
+    if (unassignedBoth === null) {
+      res.status(400).json({ error: "unassignedBoth must be true or false when provided" });
       return;
     }
     if (req.query.limit !== undefined || req.query.offset !== undefined) {
@@ -8272,15 +8537,32 @@ export function issueRoutes(
         .json({ error: "hasPlanDocument must be true or false when provided" });
       return;
     }
+    if (liveOnly === null) {
+      res.status(400).json({ error: "liveOnly must be true or false when provided" });
+      return;
+    }
 
     const blockedCountFilters = {
-      attention: "blocked",
+      attention: attention === "blocked" ? "blocked" as const : undefined,
+      dashboardKind: dashboardKind === "recovery" || dashboardKind === "blocked" || dashboardKind === "decision" ? dashboardKind : undefined,
+      liveOnly: liveOnly === true,
+      unassignedBoth: unassignedBoth === true,
+      assigneeUserId: resolvedUserFilters.assigneeUserId,
+      touchedByUserId: resolvedUserFilters.touchedByUserId,
+      inboxArchivedByUserId: resolvedUserFilters.inboxArchivedByUserId,
+      unreadForUserId: resolvedUserFilters.unreadForUserId,
+      externalObjectStatuses,
       status: req.query.status as string | string[] | undefined,
-      assigneeAgentId: req.query.assigneeAgentId as string | undefined,
+      priorities,
+      createdByAny,
+      assigneeAny,
+      assigneeAgentId: rawAssigneeAgentId === "null" ? null :
+        typeof rawAssigneeAgentId === "string" ? rawAssigneeAgentId.trim() || undefined : undefined,
       participantAgentId: req.query.participantAgentId as string | undefined,
-      assigneeUserId: req.query.assigneeUserId as string | undefined,
       projectId: req.query.projectId as string | undefined,
+      projectIds,
       workspaceId: req.query.workspaceId as string | undefined,
+      workspaceIds,
       executionWorkspaceId: req.query.executionWorkspaceId as
         string | undefined,
       parentId: (req.query.parentId ?? req.query.parentIssueId) as
@@ -8288,6 +8570,7 @@ export function issueRoutes(
       descendantOf: req.query.descendantOf as string | undefined,
       createdFromIssueId: req.query.createdFromIssueId as string | undefined,
       labelId: req.query.labelId as string | undefined,
+      labelIds,
       originKind: req.query.originKind as string | undefined,
       originKindPrefix: req.query.originKindPrefix as string | undefined,
       originId: req.query.originId as string | undefined,
@@ -9067,10 +9350,19 @@ export function issueRoutes(
       trigger: "read_projection",
       actor: getActorInfo(req),
     });
-    res.json({
-      active,
-      actions: active ? [active] : [],
-    });
+    // Port of upstream 976cdc77 (#16169): settled reconciliation receipts can
+    // still forbid replay. Keep active semantics, and include every retained hold.
+    const retainedHolds = await db.select().from(issueRecoveryActions).where(and(
+      eq(issueRecoveryActions.companyId, issue.companyId),
+      eq(issueRecoveryActions.sourceIssueId, issue.id),
+      sql`${issueRecoveryActions.evidence}->'automaticRecovery'->>'replay' = 'blocked'`,
+      inArray(issueRecoveryActions.cause, [...EXECUTION_RECONCILIATION_CAUSES]),
+    )).orderBy(desc(issueRecoveryActions.createdAt));
+    const actions = active ? [active] : [];
+    for (const hold of retainedHolds) {
+      if (hold.id !== active?.id) actions.push(issueRecoveryActionReadModel(hold));
+    }
+    res.json({ active, actions });
   });
 
   router.post("/issues/:id/recovery-actions/retry-workspace-export", validate(retryWorkspaceExportSchema), async (req, res) => {
@@ -9162,6 +9454,9 @@ export function issueRoutes(
           .for("update")
           .then((rows) => rows[0] ?? null);
         if (!lockedIssue) throw notFound("Issue not found");
+        let boardHandback:
+          | { actionId: string; currentOwnerAgentId: string; sourceAgentId: string }
+          | undefined;
 
         let activeRecoveryAction = await recoveryActionsSvc.getActiveForIssue(
           lockedIssue.companyId,
@@ -9205,6 +9500,16 @@ export function issueRoutes(
                   "Verified outcomes must restore this source recovery without replacing another active recovery action.",
                 );
               }
+              boardHandback =
+                lockedIssue.assigneeAgentId &&
+                settled.returnOwnerAgentId &&
+                settled.returnOwnerAgentId !== lockedIssue.assigneeAgentId
+                  ? {
+                      actionId: settled.id,
+                      currentOwnerAgentId: lockedIssue.assigneeAgentId,
+                      sourceAgentId: settled.returnOwnerAgentId,
+                    }
+                  : undefined;
               const [reopened] = await tx
                 .update(issueRecoveryActions)
                 .set({ status: "active", outcome: null, resolvedAt: null })
@@ -9250,16 +9555,23 @@ export function issueRoutes(
           sourceIssueStatus === "todo" &&
           activeRecoveryAction.kind === "deliberate_wait_without_target"
         ) {
-          if (
-            lockedIssue.status !== "blocked" ||
-            activeRecoveryAction.ownerType !== "board" ||
-            activeRecoveryAction.wakePolicy?.type !== "board_escalation" ||
-            !activeRecoveryAction.returnOwnerAgentId ||
-            lockedIssue.assigneeAgentId !== activeRecoveryAction.returnOwnerAgentId
-          ) {
+          const failedConditions = [
+            lockedIssue.status !== "blocked" ? "source_not_blocked" : null,
+            activeRecoveryAction.ownerType !== "board" ? "owner_not_board" : null,
+            activeRecoveryAction.wakePolicy?.type !== "board_escalation" ? "not_board_escalation" : null,
+            !activeRecoveryAction.returnOwnerAgentId ? "missing_return_owner" : null,
+            lockedIssue.assigneeAgentId !== activeRecoveryAction.returnOwnerAgentId ? "assignee_changed" : null,
+          ].filter((condition): condition is string => condition !== null);
+          if (failedConditions.length > 0) {
+            const ownRepair = req.actor.type === "agent" &&
+              activeRecoveryAction.ownerType === "agent" &&
+              activeRecoveryAction.ownerAgentId === req.actor.agentId &&
+              activeRecoveryAction.wakePolicy?.type === "bounded_owner_disposition_repair";
             throw conflict(
-              "This recovery notice no longer matches the task. Refresh the task before choosing its next step.",
-              { code: "disposition_recovery_retry_stale" },
+              ownRepair
+                ? "Record a durable disposition: in_review, blocked with a first-class blocker, or a typed question. Do not call recovery-actions/resolve to retry your own repair run."
+                : "This recovery notice no longer matches the task. Inspect the failed conditions before choosing its next step.",
+              { code: ownRepair ? "disposition_recovery_owner_must_dispose" : "disposition_recovery_retry_stale", failedConditions },
             );
           }
           const sourceOwner = lockedIssue.assigneeAgentId
@@ -9314,6 +9626,7 @@ export function issueRoutes(
               activeRecoveryAction.evidence.runId ??
               activeRecoveryAction.evidence.sourceRunId,
             decision: executionReconciliation,
+            ...(boardHandback ? { boardHandback } : {}),
           });
         } else if (executionReconciliation) {
           throw conflict(
@@ -9377,6 +9690,7 @@ export function issueRoutes(
             chatRetry
               ? { kind: "chat_failed_run_retry", actionId: chatRetry.actionId }
               : undefined,
+            boardHandback ? { boardHandback } : undefined,
           );
         }
         let issue = lockedIssue;

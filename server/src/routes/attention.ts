@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
-import type { AttentionSortMode } from "@paperclipai/shared";
+import { ATTENTION_SOURCE_KINDS, type AttentionSortMode, type AttentionSourceKind } from "@paperclipai/shared";
 import { attentionService } from "../services/attention.js";
 import { badRequest } from "../errors.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
@@ -30,6 +30,16 @@ export function attentionRoutes(db: Db) {
     const activitySince = optionalQueryString(req.query.activitySince, "activitySince");
     const activityUntil = optionalQueryString(req.query.activityUntil, "activityUntil");
     const queue = optionalQueryString(req.query.queue, "queue");
+    const sourceKind = optionalQueryString(req.query.sourceKind, "sourceKind");
+    if (sourceKind !== undefined && !ATTENTION_SOURCE_KINDS.includes(sourceKind as AttentionSourceKind)) {
+      throw badRequest("Invalid attention sourceKind");
+    }
+    const sourceKindsValue = optionalQueryString(req.query.sourceKinds, "sourceKinds");
+    const sourceKinds = sourceKindsValue?.split(",");
+    if (sourceKind !== undefined && sourceKindsValue !== undefined) throw badRequest("sourceKind and sourceKinds cannot be combined");
+    if (sourceKinds?.some((kind) => !ATTENTION_SOURCE_KINDS.includes(kind as AttentionSourceKind))) {
+      throw badRequest("Invalid attention sourceKinds");
+    }
     const cursor = optionalQueryString(req.query.cursor, "cursor");
     const sortValue = optionalQueryString(req.query.sort, "sort");
     if (sortValue !== undefined && sortValue !== "activity" && sortValue !== "decide") {
@@ -47,6 +57,8 @@ export function attentionRoutes(db: Db) {
       activitySince,
       activityUntil,
       queue,
+      sourceKind: sourceKind as AttentionSourceKind | undefined,
+      sourceKinds: sourceKinds as AttentionSourceKind[] | undefined,
       cursor,
       sort: sortValue as AttentionSortMode | undefined,
       limit,

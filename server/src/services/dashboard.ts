@@ -115,6 +115,7 @@ export function dashboardService(db: Db) {
           FROM ${heartbeatRuns} AS child
           JOIN ${heartbeatRuns} AS parent ON parent.id = child.retry_of_run_id
           WHERE child.company_id = ${companyId}
+            AND parent.company_id = ${companyId}
             AND child.status = 'succeeded'
             AND child.created_at >= ${runActivityStart.toISOString()}::timestamptz
           UNION
@@ -122,7 +123,9 @@ export function dashboardService(db: Db) {
           FROM recovered_runs rr
           JOIN ${heartbeatRuns} AS child ON child.id = rr.id
           JOIN ${heartbeatRuns} AS parent ON parent.id = child.retry_of_run_id
-          WHERE child.created_at >= ${runActivityStart.toISOString()}::timestamptz
+          WHERE child.company_id = ${companyId}
+            AND parent.company_id = ${companyId}
+            AND child.created_at >= ${runActivityStart.toISOString()}::timestamptz
         )
         SELECT
           to_char(run.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS date,

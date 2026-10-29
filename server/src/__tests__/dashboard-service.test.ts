@@ -274,4 +274,33 @@ describeEmbeddedPostgres("dashboard service", () => {
     // process_lost kills that recovered must not leak into the failed breakdown.
     expect(bucket?.failedByErrorCode.process_lost).toBeUndefined();
   });
+
+  it("does not recover a failure through another company's retry reference", async () => {
+    const companyId = randomUUID();
+    const otherCompanyId = randomUUID();
+    const agentId = randomUUID();
+    const otherAgentId = randomUUID();
+    const failedRunId = randomUUID();
+    const day = utcDay(-2);
+    await db.insert(companies).values([
+      { id: companyId, name: "Local dashboard", issuePrefix: "LDB" },
+      { id: otherCompanyId, name: "Foreign dashboard", issuePrefix: "FDB" },
+    ]);
+    await db.insert(agents).values([
+      { id: agentId, companyId, name: "Local agent", role: "engineer", adapterType: "codex_local" },
+      { id: otherAgentId, companyId: otherCompanyId, name: "Foreign agent", role: "engineer", adapterType: "codex_local" },
+    ]);
+    await db.insert(heartbeatRuns).values({
+      id: failedRunId, companyId, agentId, status: "failed", errorCode: "provider_quota", createdAt: day,
+    });
+    await db.insert(heartbeatRuns).values({
+      id: randomUUID(), companyId: otherCompanyId, agentId: otherAgentId,
+      status: "succeeded", retryOfRunId: failedRunId, createdAt: day,
+    });
+    const bucket = (await dashboardService(db).summary(companyId)).runActivity.find(
+      (row) => row.date === utcDateKey(day),
+    );
+    expect(bucket).toMatchObject({ failed: 1, recovered: 0, total: 1,
+      failedByErrorCode: { provider_quota: 1 } });
+  });
 });

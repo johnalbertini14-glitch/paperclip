@@ -1796,6 +1796,7 @@ export function parseStatusFilter(
 
 export interface IssueFilters {
   attention?: "blocked";
+  dashboardKind?: "recovery" | "blocked" | "decision";
   status?: string | readonly string[];
   /**
    * Filter by assignee agent ID.
@@ -1807,13 +1808,22 @@ export interface IssueFilters {
    *   also normalises it for direct callers.
    */
   assigneeAgentId?: string | null;
+  unassignedBoth?: boolean;
+  liveOnly?: boolean;
+  externalObjectStatuses?: string[];
+  priorities?: string[];
+  createdByAny?: string[];
+  assigneeAny?: string[];
   participantAgentId?: string;
   assigneeUserId?: string;
   touchedByUserId?: string;
   inboxArchivedByUserId?: string;
   unreadForUserId?: string;
   projectId?: string;
+  projectIds?: string[];
+  labelIds?: string[];
   workspaceId?: string;
+  workspaceIds?: string[];
   executionWorkspaceId?: string;
   parentId?: string;
   descendantOf?: string;
@@ -3457,6 +3467,8 @@ async function liveDescendantCountMapForIssues(
   const map = new Map<string, number>();
   if (uniqueIssueIds.length === 0) return map;
 
+  // Start at the requested page, not at every live run in the company. Only
+  // descendants of these targets can contribute to their displayed counts.
   for (const issueIdChunk of chunkList(
     uniqueIssueIds,
     ISSUE_LIST_RELATED_QUERY_CHUNK_SIZE,
@@ -3470,52 +3482,40 @@ async function liveDescendantCountMapForIssues(
         target_issues(issue_id) AS (
           VALUES ${sql.join(targetRows, sql`, `)}
         ),
-        live_issues(live_issue_id, parent_id) AS (
-          SELECT DISTINCT live_issue.id, live_issue.parent_id
-          FROM issues live_issue
-          JOIN heartbeat_runs live_run ON live_run.id = live_issue.execution_run_id
-          WHERE live_issue.company_id = ${companyId}
-            AND live_issue.hidden_at IS NULL
-            AND live_issue.harness_kind IS NULL
-            AND live_run.company_id = ${companyId}
-            AND live_run.status IN ('queued', 'running')
-          UNION
-          SELECT DISTINCT live_issue.id, live_issue.parent_id
-          FROM heartbeat_runs live_run
-          JOIN issues live_issue ON live_issue.id::text = (live_run.context_snapshot ->> 'issueId')
-          WHERE live_issue.company_id = ${companyId}
-            AND live_issue.hidden_at IS NULL
-            AND live_issue.harness_kind IS NULL
-            AND live_run.company_id = ${companyId}
-            AND live_run.status IN ('queued', 'running')
-        ),
-        live_ancestors(live_issue_id, ancestor_id, next_parent_id, visited_issue_ids) AS (
-          SELECT live_issues.live_issue_id, parent.id, parent.parent_id, ARRAY[live_issues.live_issue_id, parent.id]
-          FROM live_issues
-          JOIN issues parent ON parent.id = live_issues.parent_id
-          WHERE parent.company_id = ${companyId}
-            AND parent.hidden_at IS NULL
-            AND parent.harness_kind IS NULL
+        descendants(target_id, issue_id, visited_issue_ids) AS (
+          SELECT target.issue_id, child.id, ARRAY[target.issue_id, child.id]
+          FROM target_issues target
+          JOIN issues child ON child.parent_id = target.issue_id
+          WHERE child.company_id = ${companyId}
+            AND child.hidden_at IS NULL
+            AND child.harness_kind IS NULL
+            AND child.id <> target.issue_id
           UNION ALL
-          SELECT
-            live_ancestors.live_issue_id,
-            parent.id,
-            parent.parent_id,
-            live_ancestors.visited_issue_ids || parent.id
-          FROM live_ancestors
-          JOIN issues parent ON parent.id = live_ancestors.next_parent_id
-          WHERE parent.company_id = ${companyId}
-            AND parent.hidden_at IS NULL
-            AND parent.harness_kind IS NULL
-            AND NOT parent.id = ANY(live_ancestors.visited_issue_ids)
+          SELECT descendants.target_id, child.id, descendants.visited_issue_ids || child.id
+          FROM descendants
+          JOIN issues child ON child.parent_id = descendants.issue_id
+          WHERE child.company_id = ${companyId}
+            AND child.hidden_at IS NULL
+            AND child.harness_kind IS NULL
+            AND NOT child.id = ANY(descendants.visited_issue_ids)
         )
       SELECT
-        live_ancestors.ancestor_id::text AS "issueId",
-        count(DISTINCT live_ancestors.live_issue_id)::int AS "liveDescendantCount"
-      FROM live_ancestors
-      JOIN target_issues ON target_issues.issue_id = live_ancestors.ancestor_id
-      WHERE live_ancestors.ancestor_id <> live_ancestors.live_issue_id
-      GROUP BY live_ancestors.ancestor_id
+        descendants.target_id::text AS "issueId",
+        count(DISTINCT descendants.issue_id)::int AS "liveDescendantCount"
+      FROM descendants
+      JOIN issues live_issue ON live_issue.id = descendants.issue_id
+      WHERE EXISTS (
+        SELECT 1 FROM heartbeat_runs live_run
+        WHERE live_run.id = live_issue.execution_run_id
+          AND live_run.company_id = ${companyId}
+          AND live_run.status IN ('queued', 'running')
+      ) OR EXISTS (
+        SELECT 1 FROM heartbeat_runs live_run
+        WHERE live_run.company_id = ${companyId}
+          AND live_run.context_snapshot ->> 'issueId' = live_issue.id::text
+          AND live_run.status IN ('queued', 'running')
+      )
+      GROUP BY descendants.target_id
     `);
 
     const resultRows = Array.isArray(rows)
@@ -6184,6 +6184,102 @@ function assertValidAssigneeAgentFilter(
   }
 }
 
+function issueCreatorAnyCondition(creators: string[]): SQL {
+  const agents = creators.filter((id) => id.startsWith("agent:")).map((id) => id.slice(6));
+  const users = creators.filter((id) => id.startsWith("user:")).map((id) => id.slice(5));
+  return or(
+    agents.length ? inArray(issues.createdByAgentId, agents) : undefined,
+    users.length ? inArray(issues.createdByUserId, users) : undefined,
+  )!;
+}
+
+function issueAssigneeAnyCondition(assignees: string[]): SQL {
+  const agents = assignees.filter((id) => id.startsWith("agent:")).map((id) => id.slice(6));
+  const users = assignees.filter((id) => id.startsWith("user:")).map((id) => id.slice(5));
+  return or(
+    agents.length ? inArray(issues.assigneeAgentId, agents) : undefined,
+    users.length ? inArray(issues.assigneeUserId, users) : undefined,
+    assignees.includes("unassigned") ? and(isNull(issues.assigneeAgentId), isNull(issues.assigneeUserId)) : undefined,
+  )!;
+}
+
+// The UI's Live filter means an issue's own queued/running run, not live descendants.
+// An explicitly present issueId wins over taskId, as in collectLiveIssueIds.
+function issueHasLiveRunCondition(): SQL {
+  return sql`exists (
+    select 1 from ${heartbeatRuns} live_run
+    where live_run.company_id = ${issues.companyId}
+      and live_run.status in ('queued', 'running')
+      and coalesce(live_run.context_snapshot->>'issueId', live_run.context_snapshot->>'taskId') = ${issues.id}::text
+      and ${issues.status} not in ('done', 'cancelled')
+  )`;
+}
+
+// Match getIssueSummaries: only resolved linked objects count. A fresh object
+// whose refresh deadline has passed is visibly stale even before persistence.
+function issueExternalObjectStatusesCondition(statuses: string[]): SQL {
+  const matches = or(
+    statuses.includes("failed") ? sql`o.status_category in ('failed', 'blocked')` : undefined,
+    statuses.includes("waiting") ? sql`o.status_category = 'waiting'` : undefined,
+    statuses.includes("running") ? sql`o.status_category = 'running'` : undefined,
+    statuses.includes("auth_required") ? sql`o.liveness = 'auth_required'` : undefined,
+    statuses.includes("unreachable") ? sql`o.liveness = 'unreachable'` : undefined,
+    statuses.includes("stale") ? sql`(o.liveness = 'stale' or
+      (o.liveness = 'fresh' and o.next_refresh_at <= now()))` : undefined,
+  );
+  const hasObject = sql`exists (
+    select 1 from external_object_mentions m
+    join external_objects o on o.id = m.object_id and o.company_id = m.company_id
+    where m.company_id = ${issues.companyId} and m.source_issue_id = ${issues.id}
+  )`;
+  return or(
+    matches ? sql`exists (
+      select 1 from external_object_mentions m
+      join external_objects o on o.id = m.object_id and o.company_id = m.company_id
+      where m.company_id = ${issues.companyId} and m.source_issue_id = ${issues.id}
+        and ${matches}
+    )` : undefined,
+    statuses.includes("none") ? sql`not ${hasObject}` : undefined,
+  )!;
+}
+
+function issueLabelIdsCondition(companyId: string, labelIds: string[]): SQL {
+  return sql`exists (
+    select 1 from ${issueLabels}
+    where ${issueLabels.companyId} = ${companyId}
+      and ${issueLabels.issueId} = ${issues.id}
+      and ${inArray(issueLabels.labelId, labelIds)}
+  )`;
+}
+
+// Match the workspace displayed by issue-filters.ts, not both stored workspace IDs.
+// The policy's explicit default wins over the primary workspace fallback.
+function issueWorkspaceIdsCondition(workspaceIds: string[]): SQL {
+  const defaultWorkspaceId = sql`(
+    SELECT COALESCE(NULLIF(p.execution_workspace_policy->>'defaultProjectWorkspaceId', ''),
+      (SELECT pw.id::text FROM project_workspaces pw
+       WHERE pw.project_id = p.id AND pw.is_primary = true LIMIT 1))
+    FROM projects p WHERE p.id = ${issues.projectId} AND p.company_id = ${issues.companyId}
+  )`;
+  return or(
+    and(
+      inArray(issues.executionWorkspaceId, workspaceIds),
+      sql`NOT EXISTS (
+        SELECT 1 FROM execution_workspaces ew
+        WHERE ew.id = ${issues.executionWorkspaceId}
+          AND ew.company_id = ${issues.companyId}
+          AND ew.mode = 'shared_workspace'
+          AND COALESCE(ew.project_workspace_id, ${issues.projectWorkspaceId})::text = ${defaultWorkspaceId}
+      )`,
+    ),
+    and(
+      isNull(issues.executionWorkspaceId),
+      inArray(issues.projectWorkspaceId, workspaceIds),
+      sql`${issues.projectWorkspaceId}::text IS DISTINCT FROM ${defaultWorkspaceId}`,
+    ),
+  )!;
+}
+
 async function blockedInboxIssueConditions(
   dbOrTx: any,
   companyId: string,
@@ -6235,6 +6331,13 @@ async function blockedInboxIssueConditions(
         : inArray(issues.status, statuses),
     );
   }
+  if (filters?.priorities?.length)
+    conditions.push(inArray(issues.priority, filters.priorities as (typeof issues.priority.enumValues)[number][]));
+  if (filters?.createdByAny?.length) conditions.push(issueCreatorAnyCondition(filters.createdByAny));
+  if (filters?.assigneeAny?.length) conditions.push(issueAssigneeAnyCondition(filters.assigneeAny));
+  if (filters?.liveOnly) conditions.push(issueHasLiveRunCondition());
+  if (filters?.externalObjectStatuses?.length)
+    conditions.push(issueExternalObjectStatusesCondition(filters.externalObjectStatuses));
   const assigneeAgentFilter = parseIssueAssigneeAgentFilter(
     filters?.assigneeAgentId,
   );
@@ -6244,6 +6347,8 @@ async function blockedInboxIssueConditions(
   } else if (assigneeAgentFilter) {
     conditions.push(eq(issues.assigneeAgentId, assigneeAgentFilter));
   }
+  if (filters?.unassignedBoth)
+    conditions.push(isNull(issues.assigneeAgentId), isNull(issues.assigneeUserId));
   if (filters?.participantAgentId)
     conditions.push(
       participatedByAgentCondition(companyId, filters.participantAgentId),
@@ -6260,6 +6365,8 @@ async function blockedInboxIssueConditions(
     conditions.push(unreadForUserCondition(companyId, unreadForUserId));
   if (filters?.projectId)
     conditions.push(eq(issues.projectId, filters.projectId));
+  if (filters?.projectIds?.length)
+    conditions.push(inArray(issues.projectId, filters.projectIds));
   if (filters?.workspaceId) {
     conditions.push(
       or(
@@ -6268,6 +6375,10 @@ async function blockedInboxIssueConditions(
       )!,
     );
   }
+  if (filters?.workspaceIds?.length)
+    conditions.push(issueWorkspaceIdsCondition(filters.workspaceIds));
+  if (filters?.labelIds?.length)
+    conditions.push(issueLabelIdsCondition(companyId, filters.labelIds));
   if (filters?.executionWorkspaceId)
     conditions.push(
       eq(issues.executionWorkspaceId, filters.executionWorkspaceId),
@@ -6313,6 +6424,77 @@ async function blockedInboxIssueConditions(
   }
 
   return { conditions, contextUserId };
+}
+
+async function dashboardRecoveryIssueIds(
+  dbOrTx: any,
+  companyId: string,
+  issueIds: string[],
+): Promise<Set<string>> {
+  const result = new Set<string>();
+  if (issueIds.length === 0) return result;
+  const runIssueId = sql<string>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`;
+  for (const ids of chunkList(issueIds, ISSUE_LIST_RELATED_QUERY_CHUNK_SIZE)) {
+    const [actions, retries] = await Promise.all([
+      dbOrTx.select({ issueId: issueRecoveryActions.sourceIssueId })
+        .from(issueRecoveryActions)
+        .where(and(
+          eq(issueRecoveryActions.companyId, companyId),
+          inArray(issueRecoveryActions.status, ["active", "escalated"]),
+          inArray(issueRecoveryActions.sourceIssueId, ids),
+        )),
+      dbOrTx.select({ issueId: runIssueId, status: heartbeatRuns.status })
+        .from(heartbeatRuns)
+        .where(and(
+          eq(heartbeatRuns.companyId, companyId),
+          inArray(heartbeatRuns.status, ["scheduled_retry", "queued", "running"]),
+          isNotNull(heartbeatRuns.scheduledRetryReason),
+          inArray(runIssueId, ids),
+        ))
+        .orderBy(
+          sql`case ${heartbeatRuns.status} when 'running' then 0 when 'queued' then 1 else 2 end`,
+          asc(heartbeatRuns.scheduledRetryAt),
+          asc(heartbeatRuns.createdAt),
+          asc(heartbeatRuns.id),
+        ),
+    ]);
+    for (const row of actions as Array<{ issueId: string }>) result.add(row.issueId);
+    const seenRetryIssues = new Set<string>();
+    for (const row of retries as Array<{ issueId: string; status: string }>) {
+      if (seenRetryIssues.has(row.issueId)) continue;
+      seenRetryIssues.add(row.issueId);
+      if (row.status !== "running") result.add(row.issueId);
+    }
+  }
+  return result;
+}
+
+function isDashboardRecoveryIssue(
+  issueId: string,
+  attention: IssueBlockedInboxAttention,
+  recoveryIds: Set<string>,
+): boolean {
+  return recoveryIds.has(issueId)
+    || attention.state === "recovery_open"
+    || attention.reason === "open_recovery_issue";
+}
+
+function matchesDashboardIssueKind(
+  issueId: string,
+  attention: IssueBlockedInboxAttention,
+  recoveryIds: Set<string>,
+  kind: "recovery" | "blocked" | "decision",
+): boolean {
+  const recovery = isDashboardRecoveryIssue(issueId, attention, recoveryIds);
+  if (kind === "recovery") return recovery;
+  if (recovery) return false;
+  const decision = attention.state === "awaiting_decision"
+    || attention.reason === "pending_board_decision"
+    || attention.reason === "pending_user_decision";
+  if (kind === "decision") return decision;
+  if (decision) return false;
+  return attention.reason === "blocked_chain_stalled"
+    || ["board", "user", "external", "unknown"].includes(attention.owner.type);
 }
 
 async function listBlockedInboxIssues(
@@ -6365,6 +6547,9 @@ async function listBlockedInboxIssues(
   if (withRuns.length === 0) return [];
 
   const issueIds = withRuns.map((row) => row.id);
+  const dashboardRecoveryIds = filters?.dashboardKind
+    ? await dashboardRecoveryIssueIds(dbOrTx, companyId, issueIds)
+    : null;
   const includeLiveDescendantSummary =
     filters?.includeLiveDescendantSummary === true;
   const [
@@ -6375,7 +6560,6 @@ async function listBlockedInboxIssues(
     blockerAttentionByIssueId,
     reviewAttentionByIssueId,
     blockedInboxAttentionByIssueId,
-    liveDescendantCountByIssueId,
   ] = await Promise.all([
     contextUserId
       ? userCommentStatsForIssues(dbOrTx, companyId, contextUserId, issueIds)
@@ -6388,9 +6572,6 @@ async function listBlockedInboxIssues(
     listIssueBlockerAttentionMap(dbOrTx, companyId, withRuns),
     listIssueReviewAttentionMap(dbOrTx, companyId, withRuns),
     listIssueBlockedInboxAttentionMap(dbOrTx, companyId, withRuns),
-    includeLiveDescendantSummary
-      ? liveDescendantCountMapForIssues(dbOrTx, companyId, issueIds)
-      : Promise.resolve(new Map<string, number>()),
   ]);
 
   const rawSearchInput = filters?.q?.trim() ?? "";
@@ -6429,6 +6610,7 @@ async function listBlockedInboxIssues(
     .flatMap((row) => {
       const blockedInboxAttention = blockedInboxAttentionByIssueId.get(row.id);
       if (!blockedInboxAttention) return [];
+      if (dashboardRecoveryIds && !matchesDashboardIssueKind(row.id, blockedInboxAttention, dashboardRecoveryIds, filters!.dashboardKind!)) return [];
       if (
         rawSearch &&
         !blockedInboxSearchText(blockedInboxAttention, row).includes(
@@ -6460,12 +6642,6 @@ async function listBlockedInboxIssues(
           reviewAttention:
             reviewAttentionByIssueId.get(row.id) ?? reviewAttentionNone(),
           blockedInboxAttention,
-          ...(includeLiveDescendantSummary
-            ? {
-                liveDescendantCount:
-                  liveDescendantCountByIssueId.get(row.id) ?? 0,
-              }
-            : {}),
           ...(contextUserId
             ? deriveIssueUserContext(row, contextUserId, {
                 myLastCommentAt:
@@ -6488,9 +6664,19 @@ async function listBlockedInboxIssues(
     typeof filters?.limit === "number" && Number.isFinite(filters.limit)
       ? Math.max(1, Math.floor(filters.limit))
       : undefined;
-  return limit === undefined
+  const page = limit === undefined
     ? enriched.slice(offset)
     : enriched.slice(offset, offset + limit);
+  if (!includeLiveDescendantSummary || page.length === 0) return page;
+  const counts = await liveDescendantCountMapForIssues(
+    dbOrTx,
+    companyId,
+    page.map((row) => row.id),
+  );
+  return page.map((row) => ({
+    ...row,
+    liveDescendantCount: counts.get(row.id) ?? 0,
+  }));
 }
 
 async function countBlockedInboxIssues(
@@ -6511,6 +6697,9 @@ async function countBlockedInboxIssues(
 
   const blockedInboxAttentionByIssueId =
     await listIssueBlockedInboxAttentionMap(dbOrTx, companyId, rows);
+  const dashboardRecoveryIds = filters?.dashboardKind
+    ? await dashboardRecoveryIssueIds(dbOrTx, companyId, rows.map((row) => row.id))
+    : null;
   const rawSearchInput = filters?.q?.trim() ?? "";
   const rawSearch = rawSearchInput.toLowerCase();
   const commentSearchMatchIssueIds = new Set<string>();
@@ -6540,6 +6729,7 @@ async function countBlockedInboxIssues(
   return rows.reduce((count: number, row: IssueRow) => {
     const attention = blockedInboxAttentionByIssueId.get(row.id);
     if (!attention) return count;
+    if (dashboardRecoveryIds && !matchesDashboardIssueKind(row.id, attention, dashboardRecoveryIds, filters!.dashboardKind!)) return count;
     if (
       rawSearch &&
       !blockedInboxSearchText(attention, row).includes(rawSearch) &&
@@ -7989,11 +8179,21 @@ export function issueService(db: Db) {
       } else if (statuses.length > 1) {
         conditions.push(inArray(issues.status, statuses));
       }
+      if (filters?.priorities?.length) {
+        conditions.push(inArray(issues.priority, filters.priorities as (typeof issues.priority.enumValues)[number][]));
+      }
+      if (filters?.createdByAny?.length) conditions.push(issueCreatorAnyCondition(filters.createdByAny));
+      if (filters?.assigneeAny?.length) conditions.push(issueAssigneeAnyCondition(filters.assigneeAny));
+      if (filters?.liveOnly) conditions.push(issueHasLiveRunCondition());
+      if (filters?.externalObjectStatuses?.length)
+        conditions.push(issueExternalObjectStatusesCondition(filters.externalObjectStatuses));
       if (assigneeAgentFilter === null) {
         conditions.push(isNull(issues.assigneeAgentId));
       } else if (assigneeAgentFilter) {
         conditions.push(eq(issues.assigneeAgentId, assigneeAgentFilter));
       }
+      if (filters?.unassignedBoth)
+        conditions.push(isNull(issues.assigneeAgentId), isNull(issues.assigneeUserId));
       if (filters?.participantAgentId) {
         conditions.push(
           participatedByAgentCondition(companyId, filters.participantAgentId),
@@ -8015,6 +8215,8 @@ export function issueService(db: Db) {
       }
       if (filters?.projectId)
         conditions.push(eq(issues.projectId, filters.projectId));
+      if (filters?.projectIds?.length)
+        conditions.push(inArray(issues.projectId, filters.projectIds));
       if (filters?.workspaceId) {
         conditions.push(
           or(
@@ -8023,6 +8225,10 @@ export function issueService(db: Db) {
           )!,
         );
       }
+      if (filters?.workspaceIds?.length)
+        conditions.push(issueWorkspaceIdsCondition(filters.workspaceIds));
+      if (filters?.labelIds?.length)
+        conditions.push(issueLabelIdsCondition(companyId, filters.labelIds));
       if (filters?.executionWorkspaceId) {
         conditions.push(
           eq(issues.executionWorkspaceId, filters.executionWorkspaceId),
@@ -8258,6 +8464,24 @@ export function issueService(db: Db) {
       }
 
       const conditions = [eq(issues.companyId, companyId), visibleIssueCondition()];
+      if (filters?.createdFromIssueId)
+        conditions.push(createdFromIssueCondition(companyId, filters.createdFromIssueId));
+      if (filters?.descendantOf) {
+        conditions.push(sql<boolean>`
+          ${issues.id} IN (
+            WITH RECURSIVE descendants(id) AS (
+              SELECT ${issues.id} FROM ${issues}
+              WHERE ${issues.companyId} = ${companyId} AND ${issues.parentId} = ${filters.descendantOf}
+              UNION
+              SELECT ${issues.id} FROM ${issues}
+              JOIN descendants ON ${issues.parentId} = descendants.id
+              WHERE ${issues.companyId} = ${companyId}
+            ) SELECT id FROM descendants
+          )
+        `);
+      }
+      const lowTrustCondition = lowTrustBoundaryIssueCondition(companyId, filters?.lowTrustBoundary);
+      if (lowTrustCondition) conditions.push(lowTrustCondition);
       if (!filters?.q?.trim()) {
         conditions.push(isNull(issues.conversationAgentId));
         if (!filters?.touchedByUserId && !filters?.unreadForUserId && !filters?.inboxArchivedByUserId) {
@@ -8269,6 +8493,13 @@ export function issueService(db: Db) {
         conditions.push(eq(issues.status, statuses[0]!));
       else if (statuses.length > 1)
         conditions.push(inArray(issues.status, statuses));
+      if (filters?.priorities?.length)
+        conditions.push(inArray(issues.priority, filters.priorities as (typeof issues.priority.enumValues)[number][]));
+      if (filters?.createdByAny?.length) conditions.push(issueCreatorAnyCondition(filters.createdByAny));
+      if (filters?.assigneeAny?.length) conditions.push(issueAssigneeAnyCondition(filters.assigneeAny));
+      if (filters?.liveOnly) conditions.push(issueHasLiveRunCondition());
+      if (filters?.externalObjectStatuses?.length)
+        conditions.push(issueExternalObjectStatusesCondition(filters.externalObjectStatuses));
       const assigneeAgentFilter = parseIssueAssigneeAgentFilter(
         filters?.assigneeAgentId,
       );
@@ -8278,10 +8509,18 @@ export function issueService(db: Db) {
       } else if (assigneeAgentFilter) {
         conditions.push(eq(issues.assigneeAgentId, assigneeAgentFilter));
       }
+      if (filters?.unassignedBoth)
+        conditions.push(isNull(issues.assigneeAgentId), isNull(issues.assigneeUserId));
+      if (filters?.participantAgentId) conditions.push(participatedByAgentCondition(companyId, filters.participantAgentId));
       if (filters?.assigneeUserId)
         conditions.push(eq(issues.assigneeUserId, filters.assigneeUserId));
+      if (filters?.touchedByUserId) conditions.push(touchedByUserCondition(companyId, filters.touchedByUserId));
+      if (filters?.inboxArchivedByUserId) conditions.push(inboxVisibleForUserCondition(companyId, filters.inboxArchivedByUserId));
+      if (filters?.unreadForUserId) conditions.push(unreadForUserCondition(companyId, filters.unreadForUserId));
       if (filters?.projectId)
         conditions.push(eq(issues.projectId, filters.projectId));
+      if (filters?.projectIds?.length)
+        conditions.push(inArray(issues.projectId, filters.projectIds));
       if (filters?.workspaceId) {
         conditions.push(
           or(
@@ -8290,12 +8529,23 @@ export function issueService(db: Db) {
           )!,
         );
       }
+      if (filters?.workspaceIds?.length)
+        conditions.push(issueWorkspaceIdsCondition(filters.workspaceIds));
+      if (filters?.labelIds?.length)
+        conditions.push(issueLabelIdsCondition(companyId, filters.labelIds));
+      if (filters?.labelId) conditions.push(issueLabelIdsCondition(companyId, [filters.labelId]));
       if (filters?.executionWorkspaceId)
         conditions.push(
           eq(issues.executionWorkspaceId, filters.executionWorkspaceId),
         );
       if (filters?.parentId)
         conditions.push(eq(issues.parentId, filters.parentId));
+      if (filters?.updatedSince) {
+        const since = new Date(filters.updatedSince);
+        if (Number.isFinite(since.getTime())) conditions.push(gt(issues.updatedAt, since));
+      }
+      if (filters?.excludeRoutineExecutions && !filters?.originKind && !filters?.originId)
+        conditions.push(ne(issues.originKind, "routine_execution"));
       if (filters?.originKind)
         conditions.push(eq(issues.originKind, filters.originKind));
       if (filters?.originKindPrefix)
@@ -8311,10 +8561,15 @@ export function issueService(db: Db) {
       }
       if (!shouldIncludePluginOperationIssues(filters))
         conditions.push(nonPluginOperationIssueCondition());
-      const [row] = await db
-        .select({ count: sql<number>`count(*)` })
-        .from(issues)
-        .where(and(...conditions));
+      const rawSearch = filters?.q?.trim() ?? "";
+      const issueSource = db.select({ count: sql<number>`count(*)` }).from(issues);
+      const searchedSource = rawSearch
+        ? issueSource.innerJoin(sql`(
+            ${taskSearchCtes(companyId, parseTaskSearch(rawSearch), true, and(...conditions))}
+            SELECT m.id FROM matched m
+          ) task_search`, sql`task_search.id = ${issues.id}`)
+        : issueSource;
+      const [row] = await searchedSource.where(and(...conditions));
       return Number(row?.count ?? 0);
     },
 
@@ -8536,6 +8791,9 @@ export function issueService(db: Db) {
       return getIssueByIdentifier(identifier);
     },
 
+    listCurrentScheduledRetriesForIssues: async (companyId: string, issueIds: string[]) => {
+      return getCurrentScheduledRetriesForIssues(issueIds, companyId);
+    },
     getCurrentScheduledRetry: async (issueId: string) => {
       const issue = await db
         .select({ id: issues.id, companyId: issues.companyId })

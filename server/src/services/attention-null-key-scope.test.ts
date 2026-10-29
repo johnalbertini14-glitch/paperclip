@@ -109,6 +109,17 @@ const support = await getEmbeddedPostgresTestSupport();
       createdAt: taskOnlyRunCreatedAt,
     });
 
+    // A matching taskId must not admit a run whose issueId is present: the
+    // application keys that run by issueId, not by the matching taskId.
+    await db.insert(heartbeatRuns).values({
+      id: randomUUID(),
+      companyId,
+      agentId,
+      status: "succeeded",
+      contextSnapshot: { issueId: randomUUID(), taskId: issueAId },
+      createdAt: new Date("2026-01-03T12:00:00.000Z"),
+    });
+
     // Legitimate null key: a newer run with no ids keys `${agentId}:`, the same
     // key as the null-key failed run, so it must suppress that failed row.
     nullKeyRunCreatedAt = new Date("2026-01-04T00:00:00.000Z");
@@ -120,6 +131,15 @@ const support = await getEmbeddedPostgresTestSupport();
       contextSnapshot: {},
       createdAt: nullKeyRunCreatedAt,
     });
+    // Multiple retries under the same key produce one grouped response row.
+    await db.insert(heartbeatRuns).values(Array.from({ length: 80 }, (_, index) => ({
+      id: randomUUID(),
+      companyId,
+      agentId,
+      status: "succeeded" as const,
+      contextSnapshot: {},
+      createdAt: new Date(new Date("2026-01-03T14:00:00.000Z").getTime() + index * 1000),
+    })));
   }, 60_000);
 
   afterAll(async () => {
@@ -165,11 +185,10 @@ const support = await getEmbeddedPostgresTestSupport();
     const rows = await (db as unknown as { $client: { unsafe: (text: string, params: unknown[]) => Promise<Record<string, unknown>[]> } })
       .$client.unsafe(query.text, query.params);
 
-    // Both id projections share an unnamed output column, so postgres.js
-    // collapses them; a row admitted by the null branch must project null there.
-    for (const row of rows) expect(row["?column?"]).toBeNull();
+    // SQL groups by the resolved key; a null-key run remains one group.
+    for (const row of rows) expect(row.nullif).toBeNull();
     expect(rows).toHaveLength(1);
-    expect(new Date(rows[0]!.created_at as string).getTime()).toBe(nullKeyRunCreatedAt.getTime());
+    expect(new Date(rows[0]!.max as string).getTime()).toBe(nullKeyRunCreatedAt.getTime());
   }, 30_000);
 
   it("still suppresses the null-key failed run while keeping the keyed failed run in the feed", async () => {
