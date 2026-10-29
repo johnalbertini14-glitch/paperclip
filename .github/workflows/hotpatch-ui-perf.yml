@@ -29,6 +29,7 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Build and typecheck server
         run: |
+          pnpm --filter '@paperclipai/server^...' build
           pnpm --filter @paperclipai/server build
           pnpm --filter @paperclipai/server typecheck
       - name: U2, route, and review-policy suites
