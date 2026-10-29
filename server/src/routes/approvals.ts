@@ -203,6 +203,14 @@ export function approvalRoutes(
     return false;
   }
 
+  router.get("/companies/:companyId/approvals/count", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    if (!(await assertApprovalAccessAllowed(req, res, companyId))) return;
+    const status = req.query.status as string | undefined;
+    res.json({ count: await svc.count(companyId, status) });
+  });
+
   router.get("/companies/:companyId/approvals", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);

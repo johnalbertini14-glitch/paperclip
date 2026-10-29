@@ -85,11 +85,19 @@ export function approvalService(db: Db) {
     );
   }
 
+  const listConditions = (companyId: string, status?: string) => [
+    eq(approvals.companyId, companyId),
+    ...(status ? [eq(approvals.status, status)] : []),
+  ];
+
   return {
+    count: async (companyId: string, status?: string): Promise<number> => {
+      const [row] = await db.select({ total: sql<number>`count(*)` })
+        .from(approvals).where(and(...listConditions(companyId, status)));
+      return Number(row?.total ?? 0);
+    },
     list: (companyId: string, status?: string, page?: { limit?: number; offset?: number }) => {
-      const conditions = [eq(approvals.companyId, companyId)];
-      if (status) conditions.push(eq(approvals.status, status));
-      const query = db.select().from(approvals).where(and(...conditions));
+      const query = db.select().from(approvals).where(and(...listConditions(companyId, status)));
       return page?.limit !== undefined
         ? query.orderBy(desc(approvals.createdAt), desc(approvals.id)).limit(page.limit).offset(page.offset ?? 0)
         : query;

@@ -5,6 +5,7 @@ import { hoistModuleGraph } from "./helpers/hoist-module-graph.js";
 
 const mockApprovalService = vi.hoisted(() => ({
   list: vi.fn(),
+  count: vi.fn(),
   getById: vi.fn(),
   create: vi.fn(),
   approve: vi.fn(),
@@ -114,6 +115,7 @@ describe("approval routes idempotent retries", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockApprovalService.list.mockReset();
+    mockApprovalService.count.mockReset();
     mockApprovalService.getById.mockReset();
     mockApprovalService.create.mockReset();
     mockApprovalService.approve.mockReset();
@@ -149,6 +151,17 @@ describe("approval routes idempotent retries", () => {
     for (const query of ["limit=0", "limit=51", "offset=-1", "offset=1"]) {
       expect((await request(app).get(`/api/companies/company-1/approvals?${query}`)).status).toBe(400);
     }
+  });
+
+  it("counts all company pending approvals beyond a first page without listing them", async () => {
+    mockApprovalService.count.mockResolvedValue(51);
+    const app = await createApp();
+    const response = await request(app).get("/api/companies/company-1/approvals/count?status=pending");
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ count: 51 });
+    expect(mockApprovalService.count).toHaveBeenCalledWith("company-1", "pending");
+    expect(mockApprovalService.list).not.toHaveBeenCalled();
+    expect((await request(app).get("/api/companies/company-2/approvals/count?status=pending")).status).toBe(403);
   });
 
   it("does not emit duplicate approval side effects when approve is already resolved", async () => {
