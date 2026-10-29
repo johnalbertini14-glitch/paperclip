@@ -161,7 +161,8 @@ export function routineRoutes(
     if (limit !== undefined && limit > 50) throw badRequest("Invalid limit");
     const offset = parsePageNumber(req.query.offset, "offset", 0);
     if (offset !== undefined && limit === undefined) throw badRequest("offset requires limit");
-    const result = await svc.list(companyId, { projectId, limit, offset });
+    if (req.query.failedLatest !== undefined && req.query.failedLatest !== "true") throw badRequest("Invalid failedLatest");
+    const result = await svc.list(companyId, { projectId, limit, offset, ...(req.query.failedLatest === "true" ? { failedLatest: true } : {}) });
     res.json(result);
   });
 

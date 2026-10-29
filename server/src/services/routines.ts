@@ -2064,10 +2064,18 @@ export function routineService(
 
     list: async (
       companyId: string,
-      filters?: { projectId?: string | null; limit?: number; offset?: number },
+      filters?: { projectId?: string | null; limit?: number; offset?: number; failedLatest?: boolean },
     ): Promise<RoutineListItem[]> => {
       const conditions = [eq(routines.companyId, companyId)];
       if (filters?.projectId) conditions.push(eq(routines.projectId, filters.projectId));
+      if (filters?.failedLatest) {
+        conditions.push(eq(routines.status, "active"));
+        conditions.push(sql`(
+          select latest.status from routine_runs latest
+          where latest.company_id = ${companyId} and latest.routine_id = ${routines.id}
+          order by latest.created_at desc, latest.id desc limit 1
+        ) in ('failed', 'timed_out')`);
+      }
 
       const query = db
         .select()

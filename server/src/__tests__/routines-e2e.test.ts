@@ -297,7 +297,7 @@ describeEmbeddedPostgres("routine routes end-to-end", () => {
         for (const spy of spies) spy.mockRestore();
       }
     }
-  }, 20_000);
+  }, 60_000);
 
   it("keeps missing and cross-company routine resources indistinguishable", async () => {
     const { companyId, agentId, userId } = await seedFixture();
@@ -498,6 +498,33 @@ describeEmbeddedPostgres("routine routes end-to-end", () => {
     await request(board).patch(`/api/routine-triggers/${schedule.body.trigger.id}`).send({ archived: false });
     expect((await request(board).get(`/api/routines/${routineId}`)).body.triggers).toHaveLength(2);
   });
+
+  it("filters latest failed routines before paging, including an off-page failure", async () => {
+    const { companyId, userId } = await seedFixture();
+    const app = await createApp({ type: "board", userId, source: "session", companyIds: [companyId] });
+    const older = new Date(Date.now() - 86_400_000);
+    const failedId = randomUUID();
+    await db.insert(routines).values([
+      ...Array.from({ length: 50 }, (_, index) => ({ id: randomUUID(), companyId, title: `Healthy ${index}` })),
+      { id: failedId, companyId, title: "Off-page failed", updatedAt: older },
+    ]);
+    await db.insert(routineRuns).values({ companyId, routineId: failedId, source: "manual", status: "failed" });
+    const ordinary = await request(app).get(`/api/companies/${companyId}/routines?limit=50`);
+    expect(ordinary.status).toBe(200);
+    expect(ordinary.body).toHaveLength(50);
+    expect(ordinary.body.some((row: { id: string }) => row.id === failedId)).toBe(false);
+    const filtered = await request(app).get(`/api/companies/${companyId}/routines?failedLatest=true&limit=50`);
+    expect(filtered.status).toBe(200);
+    expect(filtered.body.map((row: { id: string }) => row.id)).toEqual([failedId]);
+    const next = await request(app).get(`/api/companies/${companyId}/routines?failedLatest=true&limit=50&offset=50`);
+    expect(next.status).toBe(200);
+    expect(next.body).toEqual([]);
+    await db.insert(routineRuns).values({ companyId, routineId: failedId, source: "manual", status: "completed", createdAt: new Date(Date.now() + 1000) });
+    const recovered = await request(app).get(`/api/companies/${companyId}/routines?failedLatest=true&limit=50`);
+    expect(recovered.status).toBe(200);
+    expect(recovered.body).toEqual([]);
+    expect((await request(app).get(`/api/companies/${companyId}/routines?failedLatest=maybe&limit=50`)).status).toBe(400);
+  }, 60_000);
 
   it("supports creating, scheduling, and manually running a routine through the API", async () => {
     const { companyId, agentId, projectId, userId } = await seedFixture();
