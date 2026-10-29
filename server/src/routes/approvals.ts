@@ -23,6 +23,7 @@ import { redactEventPayload } from "../redaction.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { issueService } from "../services/issues.js";
 import { REVIEW_PATH_RECOVERY_INSTRUCTION } from "../services/recovery/review-path-recovery.js";
+import { badRequest } from "../errors.js";
 
 function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(approval: T): T {
   return {
@@ -207,7 +208,18 @@ export function approvalRoutes(
     assertCompanyAccess(req, companyId);
     if (!(await assertApprovalAccessAllowed(req, res, companyId))) return;
     const status = req.query.status as string | undefined;
-    const result = await svc.list(companyId, status);
+    const parsePageNumber = (value: unknown, name: string, minimum: number) => {
+      if (value === undefined) return undefined;
+      if (typeof value !== "string" || !/^\d+$/.test(value)) throw badRequest(`Invalid ${name}`);
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed < minimum) throw badRequest(`Invalid ${name}`);
+      return parsed;
+    };
+    const limit = parsePageNumber(req.query.limit, "limit", 1);
+    if (limit !== undefined && limit > 50) throw badRequest("Invalid limit");
+    const offset = parsePageNumber(req.query.offset, "offset", 0);
+    if (offset !== undefined && limit === undefined) throw badRequest("offset requires limit");
+    const result = await svc.list(companyId, status, { limit, offset });
     res.json(result.map((approval) => redactApprovalPayload(approval)));
   });
 

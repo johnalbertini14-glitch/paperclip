@@ -1,5 +1,5 @@
 import { agentAppearanceSchema } from "@paperclipai/shared";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { approvalComments, approvals } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
@@ -86,10 +86,13 @@ export function approvalService(db: Db) {
   }
 
   return {
-    list: (companyId: string, status?: string) => {
+    list: (companyId: string, status?: string, page?: { limit?: number; offset?: number }) => {
       const conditions = [eq(approvals.companyId, companyId)];
       if (status) conditions.push(eq(approvals.status, status));
-      return db.select().from(approvals).where(and(...conditions));
+      const query = db.select().from(approvals).where(and(...conditions));
+      return page?.limit !== undefined
+        ? query.orderBy(desc(approvals.createdAt), desc(approvals.id)).limit(page.limit).offset(page.offset ?? 0)
+        : query;
     },
 
     getById: (id: string) =>

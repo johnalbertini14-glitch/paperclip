@@ -139,6 +139,18 @@ describe("approval routes idempotent retries", () => {
     mockLogActivity.mockResolvedValue(undefined);
   });
 
+  it("validates and forwards approval pagination before the list read", async () => {
+    mockApprovalService.list.mockResolvedValue([{ id: "approval-1", payload: {} }]);
+    const app = await createApp();
+    const page = await request(app).get("/api/companies/company-1/approvals?status=pending&limit=50&offset=50");
+    expect(page.status).toBe(200);
+    expect(page.body).toHaveLength(1);
+    expect(mockApprovalService.list).toHaveBeenCalledWith("company-1", "pending", { limit: 50, offset: 50 });
+    for (const query of ["limit=0", "limit=51", "offset=-1", "offset=1"]) {
+      expect((await request(app).get(`/api/companies/company-1/approvals?${query}`)).status).toBe(400);
+    }
+  });
+
   it("does not emit duplicate approval side effects when approve is already resolved", async () => {
     mockApprovalService.getById.mockResolvedValue({
       id: "approval-1",

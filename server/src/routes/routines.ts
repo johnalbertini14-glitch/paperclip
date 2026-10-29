@@ -150,7 +150,18 @@ export function routineRoutes(
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     const projectId = typeof req.query.projectId === "string" ? req.query.projectId : undefined;
-    const result = await svc.list(companyId, { projectId });
+    const parsePageNumber = (value: unknown, name: string, minimum: number) => {
+      if (value === undefined) return undefined;
+      if (typeof value !== "string" || !/^\d+$/.test(value)) throw badRequest(`Invalid ${name}`);
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed < minimum) throw badRequest(`Invalid ${name}`);
+      return parsed;
+    };
+    const limit = parsePageNumber(req.query.limit, "limit", 1);
+    if (limit !== undefined && limit > 50) throw badRequest("Invalid limit");
+    const offset = parsePageNumber(req.query.offset, "offset", 0);
+    if (offset !== undefined && limit === undefined) throw badRequest("offset requires limit");
+    const result = await svc.list(companyId, { projectId, limit, offset });
     res.json(result);
   });
 

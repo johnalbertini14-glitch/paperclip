@@ -2064,16 +2064,19 @@ export function routineService(
 
     list: async (
       companyId: string,
-      filters?: { projectId?: string | null },
+      filters?: { projectId?: string | null; limit?: number; offset?: number },
     ): Promise<RoutineListItem[]> => {
       const conditions = [eq(routines.companyId, companyId)];
       if (filters?.projectId) conditions.push(eq(routines.projectId, filters.projectId));
 
-      const rows = await db
+      const query = db
         .select()
         .from(routines)
         .where(and(...conditions))
         .orderBy(desc(routines.updatedAt), asc(routines.title));
+      const rows = filters?.limit !== undefined
+        ? await query.limit(filters.limit).offset(filters.offset ?? 0)
+        : await query;
       const routineIds = rows.map((row) => row.id);
       const [triggersByRoutine, latestRunByRoutine, activeIssueByRoutine, managedByRoutine] = await Promise.all([
         listTriggersForRoutineIds(companyId, routineIds),

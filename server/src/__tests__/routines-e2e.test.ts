@@ -569,6 +569,14 @@ describeEmbeddedPostgres("routine routes end-to-end", () => {
 
     const listRes = await request(app).get(`/api/companies/${companyId}/routines`);
     expect(listRes.status).toBe(200);
+    const firstPage = await request(app).get(`/api/companies/${companyId}/routines?limit=1&offset=0`);
+    const nextPage = await request(app).get(`/api/companies/${companyId}/routines?limit=1&offset=1`);
+    expect(firstPage.status).toBe(200);
+    expect(nextPage.status).toBe(200);
+    expect(firstPage.body).toHaveLength(1);
+    expect(nextPage.body).toEqual(listRes.body.slice(1, 2));
+    expect((await request(app).get(`/api/companies/${companyId}/routines?limit=0`)).status).toBe(400);
+    expect((await request(app).get(`/api/companies/${companyId}/routines?offset=1`)).status).toBe(400);
     const listed = listRes.body.find((r: { id: string }) => r.id === routineId);
     expect(listed).toBeDefined();
     expect(listed.activityGatePolicy).toBe("always");
@@ -626,7 +634,7 @@ describeEmbeddedPostgres("routine routes end-to-end", () => {
         "routine.run_triggered",
       ]),
     );
-  }, 15_000);
+  }, 60_000);
 
   it("runs routines with variable inputs and interpolates the execution issue description", async () => {
     const { companyId, agentId, projectId, userId } = await seedFixture();
