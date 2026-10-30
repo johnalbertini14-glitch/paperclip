@@ -81,7 +81,15 @@ export type ResolveRecoveryActionResponse = {
 
 export type IssueListFilters = {
   attention?: "blocked";
+  dashboardKind?: "recovery" | "blocked" | "decision";
   status?: string;
+  priorities?: string;
+  labelIds?: string;
+  projectIds?: string;
+  workspaceIds?: string;
+  externalObjectStatuses?: string;
+  createdByAny?: string;
+  assigneeAny?: string;
   projectId?: string;
   parentId?: string;
   assigneeAgentId?: string;
@@ -99,6 +107,8 @@ export type IssueListFilters = {
   descendantOf?: string;
   createdFromIssueId?: string;
   includeRoutineExecutions?: boolean;
+  excludeRoutineExecutions?: boolean;
+  liveOnly?: boolean;
   includeBlockedBy?: boolean;
   includeBlockedInboxAttention?: boolean;
   includeLiveDescendantSummary?: boolean;
@@ -114,7 +124,15 @@ export type IssueListFilters = {
 function issueListSearchParams(filters?: IssueListFilters) {
   const params = new URLSearchParams();
   if (filters?.attention) params.set("attention", filters.attention);
+  if (filters?.dashboardKind) params.set("dashboardKind", filters.dashboardKind);
   if (filters?.status) params.set("status", filters.status);
+  if (filters?.priorities) params.set("priorities", filters.priorities);
+  if (filters?.labelIds) params.set("labelIds", filters.labelIds);
+  if (filters?.projectIds) params.set("projectIds", filters.projectIds);
+  if (filters?.workspaceIds) params.set("workspaceIds", filters.workspaceIds);
+  if (filters?.externalObjectStatuses) params.set("externalObjectStatuses", filters.externalObjectStatuses);
+  if (filters?.createdByAny) params.set("createdByAny", filters.createdByAny);
+  if (filters?.assigneeAny) params.set("assigneeAny", filters.assigneeAny);
   if (filters?.projectId) params.set("projectId", filters.projectId);
   if (filters?.parentId) params.set("parentId", filters.parentId);
   if (filters?.assigneeAgentId)
@@ -141,6 +159,8 @@ function issueListSearchParams(filters?: IssueListFilters) {
   if (filters?.createdFromIssueId) params.set("createdFromIssueId", filters.createdFromIssueId);
   if (filters?.includeRoutineExecutions)
     params.set("includeRoutineExecutions", "true");
+  if (filters?.excludeRoutineExecutions) params.set("excludeRoutineExecutions", "true");
+  if (filters?.liveOnly) params.set("liveOnly", "true");
   if (filters?.includeBlockedBy) params.set("includeBlockedBy", "true");
   if (filters?.includeBlockedInboxAttention)
     params.set("includeBlockedInboxAttention", "true");
@@ -196,29 +216,15 @@ export const issuesApi = {
   },
   count: (
     companyId: string,
-    filters: {
-      attention: "blocked";
-      status?: string;
-      assigneeAgentId?: string;
-      assigneeUserId?: string;
-      projectId?: string;
-      labelId?: string;
-      q?: string;
-    },
+    filters: Omit<IssueListFilters, "limit" | "offset" | "sortField" | "sortDir" | "afterId">,
+    options?: RequestOptions,
   ) => {
-    const params = new URLSearchParams();
-    params.set("attention", filters.attention);
-    if (filters.status) params.set("status", filters.status);
-    if (filters.assigneeAgentId)
-      params.set("assigneeAgentId", filters.assigneeAgentId);
-    if (filters.assigneeUserId)
-      params.set("assigneeUserId", filters.assigneeUserId);
-    if (filters.projectId) params.set("projectId", filters.projectId);
-    if (filters.labelId) params.set("labelId", filters.labelId);
-    if (filters.q) params.set("q", filters.q);
-    return api.get<{ count: number }>(
-      `/companies/${companyId}/issues/count?${params.toString()}`,
-    );
+    const params = issueListSearchParams(filters);
+    // The count route rejects pagination and does not need list enrichment.
+    params.delete("includeLiveDescendantSummary");
+    params.delete("includeBlockedInboxAttention");
+    const path = `/companies/${companyId}/issues/count?${params.toString()}`;
+    return options ? api.get<{ count: number }>(path, options) : api.get<{ count: number }>(path);
   },
   listLabels: (companyId: string) =>
     api.get<IssueLabel[]>(`/companies/${companyId}/labels`),

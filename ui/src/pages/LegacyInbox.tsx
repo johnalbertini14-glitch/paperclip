@@ -1,6 +1,6 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "@/lib/router";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
 import { deriveOriginatingActor, INBOX_MINE_ISSUE_STATUS_FILTER, isHeartbeatRunVisibleInMine } from "@paperclipai/shared";
 import { usePublishSharedQueryData, useSharedPollingQuery } from "@/hooks/useSharedPolling";
 import { approvalsApi } from "../api/approvals";
@@ -183,7 +183,6 @@ import {
 } from "../lib/inboxOrderPin";
 
 const INBOX_HEARTBEAT_RUN_LIMIT = 200;
-const INBOX_ISSUE_LIST_LIMIT = 500;
 const INBOX_HOT_PATH_STALE_MS = 30_000;
 
 export { InboxIssueMetaLeading, InboxIssueTrailingColumns } from "../components/IssueColumns";
@@ -707,6 +706,11 @@ export function Inbox() {
   const experimentalSettingsLoaded = experimentalSettings !== undefined;
   const [searchQuery, setSearchQuery] = useState("");
   const normalizedSearchQuery = searchQuery.trim();
+  const [debouncedMineQuery, setDebouncedMineQuery] = useState("");
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setDebouncedMineQuery(normalizedSearchQuery), 180);
+    return () => window.clearTimeout(timeout);
+  }, [normalizedSearchQuery]);
   const [filterPreferences, setFilterPreferences] = useState<InboxFilterPreferences>(
     () => loadInboxFilterPreferences(selectedCompanyId),
   );
@@ -833,79 +837,145 @@ export function Inbox() {
   });
   usePublishSharedQueryData(sharedDashboard, dashboard, dashboardUpdatedAt);
 
-  const inboxIssuesQueryKey = [...queryKeys.issues.list(selectedCompanyId!), "compact", "with-routine-executions", "live-descendant-summary", INBOX_ISSUE_LIST_LIMIT] as const;
-  const sharedInboxIssues = useSharedPollingQuery<Issue[]>({
-    companyId: selectedCompanyId,
-    resourceKey: "inbox:issues",
-    queryKey: inboxIssuesQueryKey,
-    enabled: !!selectedCompanyId,
-  });
-  const { data: issues, isLoading: isIssuesLoading, dataUpdatedAt: issuesUpdatedAt } = useQuery({
-    queryKey: inboxIssuesQueryKey,
-    queryFn: () =>
-      issuesApi.listCompact(selectedCompanyId!, {
-        includeRoutineExecutions: true,
-        includeLiveDescendantSummary: true,
-        limit: INBOX_ISSUE_LIST_LIMIT,
-      }).then((rows) => rows as Issue[]),
-    enabled: !!selectedCompanyId,
-    refetchOnWindowFocus: false,
-    staleTime: INBOX_HOT_PATH_STALE_MS,
-  });
-  usePublishSharedQueryData(sharedInboxIssues, issues, issuesUpdatedAt);
-  const {
-    data: mineIssuesRaw = [],
-    isLoading: isMineIssuesLoading,
-    dataUpdatedAt: mineIssuesUpdatedAt,
-  } = useQuery({
-    queryKey: [...queryKeys.issues.listMineByMe(selectedCompanyId!), "compact", "with-routine-executions", "live-descendant-summary", INBOX_ISSUE_LIST_LIMIT] as const,
-    queryFn: () =>
-      issuesApi.listCompact(selectedCompanyId!, {
+  // The touched category owns the one issue page; linked context is fetched by ID below.
+  const showTouchedIssues = tab === "recent" || tab === "unread"
+    || (tab === "all" && (allCategoryFilter === "everything" || allCategoryFilter === "issues_i_touched"));
+  const [minePageCount, setMinePageCount] = useState(1);
+  const inboxPriorityFilter = issueFilters.priorities.length > 0 ? [...issueFilters.priorities].sort().join(",") : undefined;
+  const inboxLabelIds = issueFilters.labels.length > 0 ? [...issueFilters.labels].sort().join(",") : undefined;
+  const inboxProjectIds = issueFilters.projects.length > 0 ? [...issueFilters.projects].sort().join(",") : undefined;
+  const inboxWorkspaceIds = issueFilters.workspaces.length > 0 ? [...issueFilters.workspaces].sort().join(",") : undefined;
+  const inboxAssigneeAny = issueFilters.assignees.length > 0
+    ? [...issueFilters.assignees].map((value) => value === "__me" ? "user:me" : value === "__unassigned" ? "unassigned" : `agent:${value}`).sort().join(",")
+    : undefined;
+  const inboxCreatorAny = issueFilters.creators.length > 0
+    ? [...issueFilters.creators].map((value) => value === "user:local-board" ? "user:me" : value).sort().join(",")
+    : undefined;
+  const inboxExternalObjectStatuses = externalObjectsEnabled && issueFilters.externalObjectStatuses.length > 0
+    ? [...issueFilters.externalObjectStatuses].sort().join(",") : undefined;
+  const inboxExternalFilterReady = issueFilters.externalObjectStatuses.length === 0 || externalObjectsEnabled;
+  const inboxLiveOnly = issueFilters.liveOnly;
+  const inboxExcludeRoutineExecutions = issueFilters.hideRoutineExecutions;
+  const inboxStatusFilter = issueFilters.statuses.length > 0
+    ? INBOX_MINE_ISSUE_STATUS_FILTER.split(",").filter((status) => issueFilters.statuses.includes(status)).join(",")
+    : INBOX_MINE_ISSUE_STATUS_FILTER;
+  useEffect(() => setMinePageCount(1), [selectedCompanyId, debouncedMineQuery, inboxPriorityFilter, inboxStatusFilter, inboxLabelIds, inboxProjectIds, inboxWorkspaceIds, inboxAssigneeAny, inboxCreatorAny, inboxExternalObjectStatuses, inboxLiveOnly, inboxExcludeRoutineExecutions]);
+  const mineIssuesQueryKey = [...queryKeys.issues.listMineByMe(selectedCompanyId!), "compact", "with-routine-executions", "live-descendant-summary", 50] as const;
+  const searchedMineIssuesQueryKey = debouncedMineQuery || inboxPriorityFilter || inboxLabelIds || inboxProjectIds || inboxWorkspaceIds || inboxAssigneeAny || inboxCreatorAny || inboxExternalObjectStatuses || inboxLiveOnly || inboxExcludeRoutineExecutions || inboxStatusFilter !== INBOX_MINE_ISSUE_STATUS_FILTER
+    ? [...mineIssuesQueryKey, "search", debouncedMineQuery, "priorities", inboxPriorityFilter, "status", inboxStatusFilter, "labels", inboxLabelIds, "projects", inboxProjectIds, "workspaces", inboxWorkspaceIds, "assignees", inboxAssigneeAny, "creators", inboxCreatorAny, "external", inboxExternalObjectStatuses, "live", inboxLiveOnly, "exclude-routines", inboxExcludeRoutineExecutions]
+    : mineIssuesQueryKey;
+  const minePages = useQueries({
+    queries: Array.from({ length: minePageCount }, (_, page) => ({
+      queryKey: page === 0 ? searchedMineIssuesQueryKey : [...searchedMineIssuesQueryKey, "offset", page * 50],
+      queryFn: ({ signal }: { signal: AbortSignal }) => issuesApi.listCompact(selectedCompanyId!, {
         touchedByUserId: "me",
         inboxArchivedByUserId: "me",
-        status: INBOX_MINE_ISSUE_STATUS_FILTER,
+        status: inboxStatusFilter || INBOX_MINE_ISSUE_STATUS_FILTER,
+        priorities: inboxPriorityFilter,
+        labelIds: inboxLabelIds,
+        projectIds: inboxProjectIds,
+        workspaceIds: inboxWorkspaceIds,
+        assigneeAny: inboxAssigneeAny,
+        createdByAny: inboxCreatorAny,
+        externalObjectStatuses: inboxExternalObjectStatuses,
+        liveOnly: inboxLiveOnly,
+        excludeRoutineExecutions: inboxExcludeRoutineExecutions,
+        q: debouncedMineQuery || undefined,
         includeRoutineExecutions: true,
         includeLiveDescendantSummary: true,
-        limit: INBOX_ISSUE_LIST_LIMIT,
-      }).then((rows) => rows as Issue[]),
-    enabled: !!selectedCompanyId,
-    refetchOnWindowFocus: false,
-    staleTime: INBOX_HOT_PATH_STALE_MS,
+        limit: 50,
+        offset: page * 50,
+      }, { signal }).then((rows) => rows as Issue[]),
+      enabled: !!selectedCompanyId && tab === "mine" && !!inboxStatusFilter && experimentalSettingsLoaded && inboxExternalFilterReady,
+      refetchOnWindowFocus: false,
+      staleTime: INBOX_HOT_PATH_STALE_MS,
+    })),
   });
-  const mineIssuesQueryKey = [...queryKeys.issues.listMineByMe(selectedCompanyId!), "compact", "with-routine-executions", "live-descendant-summary", INBOX_ISSUE_LIST_LIMIT] as const;
+  const mineIssuesRaw = useMemo(() => minePages.flatMap((page) => page.data ?? []), [minePages]);
+  const isMineIssuesLoading = !!inboxStatusFilter && minePages.some((page) => page.isLoading);
+  const mineIssuesUpdatedAt = minePages[0]?.dataUpdatedAt ?? 0;
+  const mineHasMore = minePages.at(-1)?.data?.length === 50;
+  const mineNextPageLoading = minePages.at(-1)?.isFetching ?? false;
   const sharedMineIssues = useSharedPollingQuery<Issue[]>({
     companyId: selectedCompanyId,
     resourceKey: "inbox:mine-issues",
     queryKey: mineIssuesQueryKey,
-    enabled: !!selectedCompanyId,
+    enabled: !!selectedCompanyId && tab === "mine" && !normalizedSearchQuery && !inboxPriorityFilter && !inboxLabelIds && !inboxProjectIds && !inboxWorkspaceIds && !inboxAssigneeAny && !inboxCreatorAny && !inboxExternalObjectStatuses && experimentalSettingsLoaded && inboxExternalFilterReady && !inboxLiveOnly && !inboxExcludeRoutineExecutions && inboxStatusFilter === INBOX_MINE_ISSUE_STATUS_FILTER,
   });
-  usePublishSharedQueryData(sharedMineIssues, mineIssuesRaw, mineIssuesUpdatedAt);
-  const {
-    data: touchedIssuesRaw = [],
-    isLoading: isTouchedIssuesLoading,
-    dataUpdatedAt: touchedIssuesUpdatedAt,
-  } = useQuery({
-    queryKey: [...queryKeys.issues.listTouchedByMe(selectedCompanyId!), "compact", "with-routine-executions", "live-descendant-summary", INBOX_ISSUE_LIST_LIMIT] as const,
-    queryFn: () =>
-      issuesApi.listCompact(selectedCompanyId!, {
+  usePublishSharedQueryData(sharedMineIssues, normalizedSearchQuery || inboxPriorityFilter || inboxLabelIds || inboxProjectIds || inboxWorkspaceIds || inboxAssigneeAny || inboxCreatorAny || inboxExternalObjectStatuses || inboxLiveOnly || inboxExcludeRoutineExecutions || inboxStatusFilter !== INBOX_MINE_ISSUE_STATUS_FILTER ? undefined : minePages[0]?.data, mineIssuesUpdatedAt);
+  const [touchedPageCount, setTouchedPageCount] = useState(1);
+  const scopedTouchedSearch = tab === "recent" || tab === "unread" || (tab === "all" && !!debouncedMineQuery);
+  useEffect(() => setTouchedPageCount(1), [selectedCompanyId, tab, allCategoryFilter, debouncedMineQuery, inboxPriorityFilter, inboxStatusFilter, inboxLabelIds, inboxProjectIds, inboxWorkspaceIds, inboxAssigneeAny, inboxCreatorAny, inboxExternalObjectStatuses, inboxLiveOnly, inboxExcludeRoutineExecutions]);
+  const touchedIssuesQueryKey = [...queryKeys.issues.listTouchedByMe(selectedCompanyId!), "compact", "with-routine-executions", "live-descendant-summary", 50] as const;
+  const selectedTouchedIssuesQueryKey = scopedTouchedSearch || inboxPriorityFilter || inboxLabelIds || inboxProjectIds || inboxWorkspaceIds || inboxAssigneeAny || inboxCreatorAny || inboxExternalObjectStatuses || inboxLiveOnly || inboxExcludeRoutineExecutions || inboxStatusFilter !== INBOX_MINE_ISSUE_STATUS_FILTER
+    ? [...touchedIssuesQueryKey, tab, debouncedMineQuery, "priorities", inboxPriorityFilter, "status", inboxStatusFilter, "labels", inboxLabelIds, "projects", inboxProjectIds, "workspaces", inboxWorkspaceIds, "assignees", inboxAssigneeAny, "creators", inboxCreatorAny, "external", inboxExternalObjectStatuses, "live", inboxLiveOnly, "exclude-routines", inboxExcludeRoutineExecutions]
+    : touchedIssuesQueryKey;
+  const touchedPages = useQueries({
+    queries: Array.from({ length: touchedPageCount }, (_, page) => ({
+      queryKey: page === 0 ? selectedTouchedIssuesQueryKey : [...selectedTouchedIssuesQueryKey, "offset", page * 50],
+      queryFn: ({ signal }: { signal: AbortSignal }) => issuesApi.listCompact(selectedCompanyId!, {
         touchedByUserId: "me",
-        status: INBOX_MINE_ISSUE_STATUS_FILTER,
+        status: inboxStatusFilter || INBOX_MINE_ISSUE_STATUS_FILTER,
+        priorities: inboxPriorityFilter,
+        labelIds: inboxLabelIds,
+        projectIds: inboxProjectIds,
+        workspaceIds: inboxWorkspaceIds,
+        assigneeAny: inboxAssigneeAny,
+        createdByAny: inboxCreatorAny,
+        externalObjectStatuses: inboxExternalObjectStatuses,
+        liveOnly: inboxLiveOnly,
+        excludeRoutineExecutions: inboxExcludeRoutineExecutions,
+        q: scopedTouchedSearch ? debouncedMineQuery || undefined : undefined,
+        unreadForUserId: tab === "unread" ? "me" : undefined,
         includeRoutineExecutions: true,
         includeLiveDescendantSummary: true,
-        limit: INBOX_ISSUE_LIST_LIMIT,
-      }).then((rows) => rows as Issue[]),
-    enabled: !!selectedCompanyId,
+        limit: 50,
+        offset: page * 50,
+      }, { signal }).then((rows) => rows as Issue[]),
+      enabled: !!selectedCompanyId && showTouchedIssues && !!inboxStatusFilter && experimentalSettingsLoaded && inboxExternalFilterReady,
+      refetchOnWindowFocus: false,
+      staleTime: INBOX_HOT_PATH_STALE_MS,
+    })),
+  });
+  // Count selected issue views on the server without adding work to unfiltered first paint.
+  const countSelectedIssues = !!(debouncedMineQuery || inboxPriorityFilter || inboxLabelIds || inboxProjectIds
+    || inboxWorkspaceIds || inboxAssigneeAny || inboxCreatorAny || inboxExternalObjectStatuses
+    || inboxLiveOnly || inboxExcludeRoutineExecutions || inboxStatusFilter !== INBOX_MINE_ISSUE_STATUS_FILTER);
+  const { data: selectedIssueCount, isError: selectedIssueCountError } = useQuery({
+    queryKey: ["inbox", selectedCompanyId, tab, "selected-issue-count", searchedMineIssuesQueryKey, selectedTouchedIssuesQueryKey],
+    queryFn: ({ signal }) => issuesApi.count(selectedCompanyId!, {
+      touchedByUserId: "me",
+      inboxArchivedByUserId: tab === "mine" ? "me" : undefined,
+      unreadForUserId: tab === "unread" ? "me" : undefined,
+      status: inboxStatusFilter,
+      priorities: inboxPriorityFilter,
+      labelIds: inboxLabelIds,
+      projectIds: inboxProjectIds,
+      workspaceIds: inboxWorkspaceIds,
+      assigneeAny: inboxAssigneeAny,
+      createdByAny: inboxCreatorAny,
+      externalObjectStatuses: inboxExternalObjectStatuses,
+      liveOnly: inboxLiveOnly,
+      excludeRoutineExecutions: inboxExcludeRoutineExecutions,
+      q: debouncedMineQuery || undefined,
+      includeRoutineExecutions: true,
+    }, { signal }),
+    enabled: !!selectedCompanyId && (tab === "mine" || showTouchedIssues) && !!inboxStatusFilter
+      && countSelectedIssues && experimentalSettingsLoaded && experimentalSettings?.enableStreamlinedUi === false && inboxExternalFilterReady,
     refetchOnWindowFocus: false,
     staleTime: INBOX_HOT_PATH_STALE_MS,
   });
-  const touchedIssuesQueryKey = [...queryKeys.issues.listTouchedByMe(selectedCompanyId!), "compact", "with-routine-executions", "live-descendant-summary", INBOX_ISSUE_LIST_LIMIT] as const;
+  const touchedIssuesRaw = useMemo(() => touchedPages.flatMap((page) => page.data ?? []), [touchedPages]);
+  const isTouchedIssuesLoading = !!inboxStatusFilter && touchedPages.some((page) => page.isLoading);
+  const touchedHasMore = touchedPages.at(-1)?.data?.length === 50;
+  const touchedNextPageLoading = touchedPages.at(-1)?.isFetching ?? false;
   const sharedTouchedIssues = useSharedPollingQuery<Issue[]>({
     companyId: selectedCompanyId,
     resourceKey: "inbox:touched-issues",
     queryKey: touchedIssuesQueryKey,
-    enabled: !!selectedCompanyId,
+    enabled: !!selectedCompanyId && showTouchedIssues && !scopedTouchedSearch && !inboxPriorityFilter && !inboxLabelIds && !inboxProjectIds && !inboxWorkspaceIds && !inboxAssigneeAny && !inboxCreatorAny && !inboxExternalObjectStatuses && experimentalSettingsLoaded && inboxExternalFilterReady && !inboxLiveOnly && !inboxExcludeRoutineExecutions && inboxStatusFilter === INBOX_MINE_ISSUE_STATUS_FILTER,
   });
-  usePublishSharedQueryData(sharedTouchedIssues, touchedIssuesRaw, touchedIssuesUpdatedAt);
+  usePublishSharedQueryData(sharedTouchedIssues, scopedTouchedSearch || inboxPriorityFilter || inboxLabelIds || inboxProjectIds || inboxWorkspaceIds || inboxAssigneeAny || inboxCreatorAny || inboxExternalObjectStatuses || inboxLiveOnly || inboxExcludeRoutineExecutions || inboxStatusFilter !== INBOX_MINE_ISSUE_STATUS_FILTER ? undefined : touchedPages[0]?.data, touchedPages[0]?.dataUpdatedAt ?? 0);
 
   const { data: heartbeatRuns, isLoading: isRunsLoading } = useQuery({
     queryKey: [...queryKeys.heartbeats(selectedCompanyId!), "limit", INBOX_HEARTBEAT_RUN_LIMIT],
@@ -914,6 +984,30 @@ export function Inbox() {
     refetchOnWindowFocus: false,
     staleTime: INBOX_HOT_PATH_STALE_MS,
   });
+  const contextIssueIds = useMemo(() => {
+    if (tab !== "all" || allCategoryFilter !== "everything") return [];
+    const loaded = new Set(touchedIssuesRaw.map((issue) => issue.id));
+    const ids = new Set<string>();
+    for (const run of getLatestFailedRunsByAgent(heartbeatRuns ?? [])) {
+      const id = readIssueIdFromRun(run);
+      if (id && !loaded.has(id)) ids.add(id);
+    }
+    return [...ids];
+  }, [allCategoryFilter, heartbeatRuns, tab, touchedIssuesRaw]);
+  const contextIssueQueries = useQueries({
+    queries: contextIssueIds.map((id) => ({
+      queryKey: [...queryKeys.issues.detail(id), "inbox-context", selectedCompanyId],
+      queryFn: ({ signal }: { signal: AbortSignal }) => issuesApi.get(id, { signal }),
+      enabled: !!selectedCompanyId && !isTouchedIssuesLoading,
+      staleTime: INBOX_HOT_PATH_STALE_MS,
+      retry: false,
+    })),
+  });
+  const issues = useMemo(() => [
+    ...touchedIssuesRaw,
+    ...contextIssueQueries.flatMap((query) => query.data?.companyId === selectedCompanyId ? [query.data] : []),
+  ], [contextIssueQueries, selectedCompanyId, touchedIssuesRaw]);
+  const isIssuesLoading = contextIssueQueries.some((query) => query.isLoading);
   const liveRunsQueryKey = queryKeys.liveRuns(selectedCompanyId!);
   const sharedLiveRuns = useSharedPollingQuery({
     companyId: selectedCompanyId,
@@ -968,6 +1062,11 @@ export function Inbox() {
   );
   const shouldUseIssueSearchSupplement =
     !!selectedCompanyId
+    && tab !== "blocked"
+    && tab !== "mine"
+    && tab !== "recent"
+    && tab !== "unread"
+    && tab !== "all"
     && normalizedSearchQuery.length > 0;
   const { data: remoteIssueSearchResults = [] } = useQuery({
     queryKey: [
@@ -976,15 +1075,14 @@ export function Inbox() {
       "inbox-supplement",
       "live-descendant-summary",
     ],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       issuesApi.listCompact(selectedCompanyId!, {
         q: normalizedSearchQuery,
         limit: 25,
         includeRoutineExecutions: true,
         includeLiveDescendantSummary: true,
-      }).then((rows) => rows as Issue[]),
+      }, { signal }).then((rows) => rows as Issue[]),
     enabled: shouldUseIssueSearchSupplement,
-    placeholderData: (previousData) => previousData,
   });
   const liveIssueIds = useMemo(
     () => collectLiveIssueIds(liveRuns, [
@@ -1014,18 +1112,13 @@ export function Inbox() {
     externalObjectSummaryByIssueId,
     externalObjectSummariesReady: externalObjectSummariesReady && !externalObjectSummariesLoading,
   }), [externalObjectSummariesLoading, externalObjectSummariesReady, externalObjectSummaryByIssueId]);
-  const visibleMineIssues = useMemo(
-    () => applyIssueFilters(mineIssues, issueFilters, currentUserId, true, liveIssueIds, issueFilterContext),
-    [mineIssues, issueFilters, currentUserId, liveIssueIds, issueFilterContext],
-  );
-  const visibleTouchedIssues = useMemo(
-    () => applyIssueFilters(touchedIssues, issueFilters, currentUserId, true, liveIssueIds, issueFilterContext),
-    [touchedIssues, issueFilters, currentUserId, liveIssueIds, issueFilterContext],
-  );
-  const unreadTouchedIssues = useMemo(
-    () => visibleTouchedIssues.filter((issue) => issue.isUnreadForMe),
-    [visibleTouchedIssues],
-  );
+  // These compact pages already carry every selected issue facet before LIMIT/OFFSET.
+  // Rechecking sparse compact fields here hides matches returned by the server.
+  const visibleMineIssues = mineIssues;
+  const visibleTouchedIssues = touchedIssues;
+  // The Unread request already applies unreadForUserId before LIMIT/OFFSET.
+  // Compact rows must not be filtered a second time after server pagination.
+  const unreadTouchedIssues = visibleTouchedIssues;
   const creatorOptions = useMemo<CreatorOption[]>(() => {
     const options = new Map<string, CreatorOption>();
     const sourceIssues = [...mineIssues, ...touchedIssues];
@@ -1241,6 +1334,9 @@ export function Inbox() {
     if (!q) return workItemsToRender;
     return workItemsToRender.filter((item) => {
       if (item.kind === "issue") {
+        // Compact rows omit some fields matched by the scoped server search.
+        if ((tab === "all" || tab === "mine" || tab === "recent" || tab === "unread")
+          && debouncedMineQuery === normalizedSearchQuery) return true;
         return matchesInboxIssueSearch(item.issue, q, {
           isolatedWorkspacesEnabled,
           executionWorkspaceById,
@@ -1286,6 +1382,8 @@ export function Inbox() {
     isolatedWorkspacesEnabled,
     normalizedSearchQuery,
     projectWorkspaceById,
+    tab,
+    debouncedMineQuery,
   ]);
 
   const archivedSearchIssues = useMemo(
@@ -2607,7 +2705,7 @@ export function Inbox() {
         <PageSkeleton variant="inbox" />
       )}
 
-      {tab !== "blocked" && allLoaded && visibleSections.length === 0 && (
+      {tab !== "blocked" && allLoaded && visibleSections.length === 0 && !(tab === "mine" && mineHasMore) && (
         <EmptyState
           icon={searchQuery.trim() ? Search : InboxIcon}
           message={
@@ -3094,6 +3192,27 @@ export function Inbox() {
             </div>
           </div>
         </>
+      )}
+
+      {(tab === "mine" || showTouchedIssues) && countSelectedIssues && selectedIssueCount && !selectedIssueCountError
+        && (!normalizedSearchQuery || debouncedMineQuery === normalizedSearchQuery) && (
+        <p className="text-sm text-muted-foreground">{selectedIssueCount.count} matching tasks</p>
+      )}
+      {tab === "mine" && mineHasMore && (
+        <button type="button" disabled={mineNextPageLoading} onClick={() => setMinePageCount((count) => count + 1)}>
+          {mineNextPageLoading ? "Loading…" : "Load more tasks"}
+        </button>
+      )}
+      {tab === "mine" && minePages.at(-1)?.isError && (
+        <button type="button" onClick={() => minePages.at(-1)?.refetch()}>Retry loading tasks</button>
+      )}
+      {showTouchedIssues && touchedHasMore && (
+        <button type="button" disabled={touchedNextPageLoading} onClick={() => setTouchedPageCount((count) => count + 1)}>
+          {touchedNextPageLoading ? "Loading…" : "Load more recent tasks"}
+        </button>
+      )}
+      {showTouchedIssues && touchedPages.at(-1)?.isError && (
+        <button type="button" onClick={() => touchedPages.at(-1)?.refetch()}>Retry loading recent tasks</button>
       )}
 
       {showAlertsSection && (

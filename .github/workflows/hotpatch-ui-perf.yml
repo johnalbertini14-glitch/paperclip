@@ -1,14 +1,6 @@
-name: Hotpatch UI performance server build
+name: Hotpatch UI performance server and UI build
 on:
   workflow_dispatch:
-  push:
-    branches: [hotpatch-ui-perf-20261029]
-    paths:
-      - '.github/workflows/hotpatch-ui-perf.yml'
-      - 'server/**'
-      - 'packages/**'
-      - 'pnpm-lock.yaml'
-      - 'package.json'
 permissions:
   contents: read
 jobs:
@@ -43,6 +35,9 @@ jobs:
           server/src/__tests__/approval-routes-idempotency.test.ts
           server/src/__tests__/approvals-count-db.test.ts
           server/src/__tests__/routines-e2e.test.ts
+          server/src/__tests__/issue-stalled-review-decision-routes.test.ts
+          server/src/services/attention-multikey-plan.test.ts
+          server/src/services/dashboard-recovered-plan.test.ts
           --reporter=dot
       - name: Artifact manifest
         run: |
@@ -56,5 +51,61 @@ jobs:
           path: |
             server/dist/
             server/dist-sha256.txt
+          if-no-files-found: warn
+          retention-days: 7
+  ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      NODE_OPTIONS: --max-old-space-size=6144
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build UI workspace dependencies and typecheck UI
+        run: |
+          pnpm --filter '@paperclipai/ui^...' build
+          pnpm --filter @paperclipai/ui typecheck
+      - name: UI performance suites
+        run: >-
+          pnpm exec vitest run
+          ui/src/api/attention.test.ts
+          ui/src/api/issues.test.ts
+          ui/src/api/dashboard-paged-sources.test.ts
+          ui/src/components/IssuesList.test.tsx
+          ui/src/components/dashboard/BoardAttentionSheet.test.tsx
+          ui/src/context/EditorAutocompleteContext.test.tsx
+          ui/src/hooks/useInboxBadge.test.tsx
+          ui/src/hooks/useInboxBadge.approvals.test.tsx
+          ui/src/lib/inboxArchiveCache.test.ts
+          ui/src/lib/vite-sw-build-id.test.ts
+          ui/src/lib/dashboard-operations.test.ts
+          ui/src/pages/Dashboard.test.ts
+          ui/src/pages/Dashboard.integration.test.tsx
+          ui/src/pages/Inbox.test.tsx
+          ui/src/pages/Issues.test.tsx
+          ui/src/pages/Issues.integration.test.tsx
+          --reporter=dot
+      - name: Build UI
+        run: pnpm --filter @paperclipai/ui build
+      - name: UI artifact manifest
+        run: |
+          cd ui
+          find dist -type f -print0 | sort -z | xargs -0 sha256sum > dist-sha256.txt
+          sha256sum dist-sha256.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-dist-${{ github.sha }}
+          path: |
+            ui/dist/
+            ui/dist-sha256.txt
           if-no-files-found: warn
           retention-days: 7

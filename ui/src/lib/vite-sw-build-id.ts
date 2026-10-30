@@ -50,18 +50,32 @@ export function deriveBuildIdFromEntryFileName(entryFileName: string): string {
   return sanitized || "build";
 }
 
+export function writeStampedServiceWorker(
+  publicDir: string,
+  outDir: string,
+  serviceWorkerFileName: string,
+  buildId: string,
+): void {
+  const source = fs.readFileSync(path.resolve(publicDir, serviceWorkerFileName), "utf8");
+  const stamped = stampServiceWorkerBuildId(source, buildId);
+  fs.mkdirSync(outDir, { recursive: true });
+  fs.writeFileSync(path.resolve(outDir, serviceWorkerFileName), stamped);
+}
+
 export function serviceWorkerBuildIdPlugin(
   options: { serviceWorkerFileName?: string } = {},
 ): Plugin {
   const serviceWorkerFileName = options.serviceWorkerFileName ?? "sw.js";
   let buildId: string | null = null;
   let outDir = "dist";
+  let publicDir = "public";
 
   return {
     name: "paperclip-sw-build-id",
     apply: "build",
     configResolved(config) {
       outDir = config.build.outDir;
+      publicDir = config.publicDir;
     },
     generateBundle(_options, bundle) {
       const entry = Object.values(bundle).find(
@@ -72,10 +86,7 @@ export function serviceWorkerBuildIdPlugin(
       }
     },
     closeBundle() {
-      const swPath = path.resolve(outDir, serviceWorkerFileName);
-      const source = fs.readFileSync(swPath, "utf8");
-      const stamped = stampServiceWorkerBuildId(source, buildId ?? "build");
-      fs.writeFileSync(swPath, stamped);
+      writeStampedServiceWorker(publicDir, outDir, serviceWorkerFileName, buildId ?? "build");
     },
   };
 }

@@ -175,12 +175,24 @@ function resolveRestoreIndex(currentData: Issue[], previousData: Issue[], previo
   return Math.min(previousIndex, currentData.length);
 }
 
+type OptimisticUnreadCount = {
+  count: number;
+  // Local deltas belong to this response only. A fresh server response drops
+  // them, so rollback cannot add to an already-reconciled authoritative count.
+  optimisticArchivedIssueIds?: string[];
+};
+
+function unreadCountKey(companyId: string) {
+  return [...queryKeys.sidebarBadges(companyId), "unread-issues"];
+}
+
 export async function cancelInboxIssueQueries(queryClient: QueryClient, companyId: string) {
-  await Promise.all(
-    inboxIssueQueryPrefixes(companyId).map((queryKey) =>
+  await Promise.all([
+    queryClient.cancelQueries({ queryKey: unreadCountKey(companyId) }),
+    ...inboxIssueQueryPrefixes(companyId).map((queryKey) =>
       queryClient.cancelQueries({ queryKey }),
     ),
-  );
+  ]);
 }
 
 export function snapshotInboxIssueCaches(
@@ -197,6 +209,26 @@ export function removeIssueFromInboxCaches(
   companyId: string,
   issueId: string,
 ) {
+  // Only a known unread row in the personal Mine cache can contribute. Never
+  // infer eligibility from a global/search row, nor hydrate rows for the badge.
+  const isUnreadPersonalIssue = queryClient.getQueriesData<Issue[]>({
+    queryKey: queryKeys.issues.listMineByMe(companyId),
+  }).some(([, rows]) => rows?.some((issue) =>
+    issue.id === issueId
+    && issue.isUnreadForMe
+    && issue.status !== "cancelled"
+    && issue.originKind !== "routine_execution",
+  ));
+  if (isUnreadPersonalIssue) {
+    queryClient.setQueryData<OptimisticUnreadCount>(unreadCountKey(companyId), (current) => {
+      if (!current || current.count <= 0 || current.optimisticArchivedIssueIds?.includes(issueId)) return current;
+      return {
+        ...current,
+        count: current.count - 1,
+        optimisticArchivedIssueIds: [...(current.optimisticArchivedIssueIds ?? []), issueId],
+      };
+    });
+  }
   for (const queryKey of inboxIssueQueryPrefixes(companyId)) {
     queryClient.setQueriesData<Issue[]>(
       { queryKey },
@@ -210,6 +242,17 @@ export function restoreIssueToInboxCaches(
   snapshot: InboxIssueCacheSnapshot,
   issueId: string,
 ) {
+  const companyIds = new Set(snapshot.map(([key]) => inboxIssueCompanyIdFromQueryKey(key)).filter((id): id is string => !!id));
+  for (const companyId of companyIds) {
+    queryClient.setQueryData<OptimisticUnreadCount>(unreadCountKey(companyId), (current) => {
+      if (!current?.optimisticArchivedIssueIds?.includes(issueId)) return current;
+      return {
+        ...current,
+        count: current.count + 1,
+        optimisticArchivedIssueIds: current.optimisticArchivedIssueIds.filter((id) => id !== issueId),
+      };
+    });
+  }
   for (const [queryKey, previousData] of snapshot) {
     if (!previousData) continue;
 

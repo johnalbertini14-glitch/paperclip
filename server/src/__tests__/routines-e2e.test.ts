@@ -516,6 +516,9 @@ describeEmbeddedPostgres("routine routes end-to-end", () => {
     const filtered = await request(app).get(`/api/companies/${companyId}/routines?failedLatest=true&limit=50`);
     expect(filtered.status).toBe(200);
     expect(filtered.body.map((row: { id: string }) => row.id)).toEqual([failedId]);
+    const count = await request(app).get(`/api/companies/${companyId}/routines/count?failedLatest=true`);
+    expect(count.status).toBe(200);
+    expect(count.body).toEqual({ count: 1 });
     const next = await request(app).get(`/api/companies/${companyId}/routines?failedLatest=true&limit=50&offset=50`);
     expect(next.status).toBe(200);
     expect(next.body).toEqual([]);
@@ -523,6 +526,10 @@ describeEmbeddedPostgres("routine routes end-to-end", () => {
     const recovered = await request(app).get(`/api/companies/${companyId}/routines?failedLatest=true&limit=50`);
     expect(recovered.status).toBe(200);
     expect(recovered.body).toEqual([]);
+    const recoveredCount = await request(app).get(`/api/companies/${companyId}/routines/count?failedLatest=true`);
+    expect(recoveredCount.status).toBe(200);
+    expect(recoveredCount.body).toEqual({ count: 0 });
+    expect((await request(app).get(`/api/companies/${companyId}/routines/count?failedLatest=maybe`)).status).toBe(400);
     expect((await request(app).get(`/api/companies/${companyId}/routines?failedLatest=maybe&limit=50`)).status).toBe(400);
   }, 60_000);
 

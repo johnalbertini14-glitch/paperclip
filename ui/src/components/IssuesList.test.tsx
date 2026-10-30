@@ -375,6 +375,63 @@ describe("IssuesList", () => {
     container.remove();
   });
 
+  it("reports the real child assignee view state and resolved session user to its paged parent", async () => {
+    const onAssigneeFilterChange = vi.fn();
+    mockAuthApi.getSession.mockResolvedValue({ user: { id: "22222222-2222-4222-8222-222222222222" } });
+    const { root } = renderWithQueryClient(
+      <IssuesList
+        issues={[]}
+        isLoading={false}
+        agents={[]}
+        projects={[]}
+        viewStateKey="paperclip:test-issues"
+        initialAssignees={["__me", "__unassigned"]}
+        onAssigneeFilterChange={onAssigneeFilterChange}
+        onUpdateIssue={() => {}}
+      />,
+      container,
+    );
+    await vi.waitFor(() => expect(onAssigneeFilterChange).toHaveBeenCalledWith(
+      ["__me", "__unassigned"], "22222222-2222-4222-8222-222222222222",
+    ));
+    act(() => root.unmount());
+  });
+
+  it("reports real Responsible popover clicks for Me, an agent and no responsible", async () => {
+    const onAssigneeFilterChange = vi.fn();
+    const agentId = "11111111-1111-4111-8111-111111111111";
+    mockAuthApi.getSession.mockResolvedValue({ user: { id: "local-board" } });
+    const { root } = renderWithQueryClient(
+      <IssuesList
+        issues={[]}
+        isLoading={false}
+        agents={[{ id: agentId, name: "Worker A" } as never]}
+        projects={[]}
+        viewStateKey="paperclip:test-issues"
+        onAssigneeFilterChange={onAssigneeFilterChange}
+        onUpdateIssue={() => {}}
+      />,
+      container,
+    );
+    await vi.waitFor(() => expect(onAssigneeFilterChange).toHaveBeenCalledWith([], "local-board"));
+    const trigger = container.querySelector<HTMLButtonElement>('button[title="Filter"]');
+    expect(trigger).not.toBeNull();
+    await act(async () => { trigger!.click(); });
+    const responsible = document.querySelector('[data-filter-options="responsible"]');
+    expect(responsible).not.toBeNull();
+    for (const [label, selected] of [
+      ["Me", ["__me"]],
+      ["Worker A", ["__me", agentId]],
+      ["No responsible", ["__me", agentId, "__unassigned"]],
+    ] as const) {
+      const option = [...responsible!.querySelectorAll("label")].find((item) => item.textContent?.trim() === label);
+      expect(option, `missing ${label}`).toBeTruthy();
+      await act(async () => { option!.click(); });
+      await vi.waitFor(() => expect(onAssigneeFilterChange).toHaveBeenCalledWith([...selected], "local-board"));
+    }
+    act(() => root.unmount());
+  });
+
   it("uses the master list and legacy persistence when Streamlined UI is off", async () => {
     mockInstanceSettingsApi.getExperimental.mockResolvedValue({
       enableIsolatedWorkspaces: false,
@@ -1363,12 +1420,14 @@ describe("IssuesList", () => {
     await waitForAssertion(() => {
       expect(mockIssuesApi.list).toHaveBeenCalledWith("company-1", expect.objectContaining({
         status: "backlog",
-        limit: 200,
+        limit: 50,
+        offset: 0,
         includeRoutineExecutions: true,
       }), { signal: expect.any(AbortSignal) });
       expect(mockIssuesApi.list).toHaveBeenCalledWith("company-1", expect.objectContaining({
         status: "done",
-        limit: 200,
+        limit: 50,
+        offset: 0,
         includeRoutineExecutions: true,
       }), { signal: expect.any(AbortSignal) });
       expect(mockKanbanBoard).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -1491,13 +1550,124 @@ describe("IssuesList", () => {
     });
   });
 
-  it("shows a refinement hint when a board column hits its server cap", async () => {
+  it("filters board columns on the server before paging and does not hide an off-page match locally", async () => {
+    localStorage.setItem(
+      "paperclip:test-issues:company-1",
+      JSON.stringify({ viewMode: "board", statuses: ["backlog"], priorities: ["critical"], labels: ["11111111-1111-4111-8111-111111111111"] }),
+    );
+    const offPage = createIssue({ id: "board-filtered-off-page", title: "Filtered off-page result", status: "backlog", priority: "critical" });
+    mockIssuesApi.list.mockImplementation((_companyId, filters) => {
+      if (filters?.status === "backlog" && filters?.priorities === "critical" && filters?.labelIds === "11111111-1111-4111-8111-111111111111") {
+        return Promise.resolve([offPage]);
+      }
+      return Promise.resolve([]);
+    });
+    const { root } = renderWithQueryClient(
+      <IssuesList issues={[]} agents={[]} projects={[]} viewStateKey="paperclip:test-issues" onUpdateIssue={() => undefined} />,
+      container,
+    );
+    await waitForAssertion(() => {
+      expect(mockIssuesApi.list).toHaveBeenCalledWith("company-1", expect.objectContaining({
+        status: "backlog", priorities: "critical", labelIds: "11111111-1111-4111-8111-111111111111", limit: 50, offset: 0,
+      }), { signal: expect.any(AbortSignal) });
+      expect(container.textContent).toContain("Filtered off-page result");
+    });
+    expect(mockIssuesApi.list.mock.calls.every(([, filters]) => filters?.priorities === "critical" && filters?.labelIds === "11111111-1111-4111-8111-111111111111")).toBe(true);
+    expect(mockIssuesApi.list.mock.calls.some(([, filters]) => filters?.status === "todo")).toBe(false);
+    act(() => { root.unmount(); });
+  });
+
+  it("switches board status filters without showing or retaining a stale in-flight column", async () => {
+    localStorage.setItem("paperclip:test-issues:company-1", JSON.stringify({ viewMode: "board", statuses: ["backlog"] }));
+    let resolveBacklog!: (issues: Issue[]) => void;
+    const pendingBacklog = new Promise<Issue[]>((resolve) => { resolveBacklog = resolve; });
+    mockIssuesApi.list.mockImplementation((_companyId, filters) =>
+      filters?.status === "backlog" ? pendingBacklog
+        : Promise.resolve([createIssue({ id: "off-page-todo", title: "Filtered todo target", status: "todo" })]));
+    const { root } = renderWithQueryClient(
+      <IssuesList issues={[]} agents={[]} projects={[]} viewStateKey="paperclip:test-issues" onUpdateIssue={() => undefined} />,
+      container,
+    );
+    await waitForAssertion(() => expect(mockIssuesApi.list).toHaveBeenCalledWith(
+      "company-1", expect.objectContaining({ status: "backlog", limit: 50, offset: 0 }),
+      { signal: expect.any(AbortSignal) },
+    ));
+    const backlogSignal = mockIssuesApi.list.mock.calls[0]?.[2]?.signal as AbortSignal;
+    const trigger = container.querySelector<HTMLButtonElement>('button[title^="Filters:"]');
+    expect(trigger).not.toBeNull();
+    await act(async () => { trigger!.click(); });
+    const statusLabels = [...document.querySelectorAll("label")];
+    for (const name of ["Todo", "Backlog"]) {
+      const option = statusLabels.find((label) => label.textContent?.trim().includes(name));
+      expect(option, `missing ${name}`).toBeTruthy();
+      await act(async () => { option!.click(); });
+    }
+    await waitForAssertion(() => {
+      expect(mockIssuesApi.list).toHaveBeenCalledWith(
+        "company-1", expect.objectContaining({ status: "todo", limit: 50, offset: 0 }),
+        { signal: expect.any(AbortSignal) },
+      );
+      expect(container.textContent).toContain("Filtered todo target");
+      expect(backlogSignal.aborted).toBe(true);
+    });
+    await act(async () => { resolveBacklog([createIssue({ id: "stale-backlog", title: "Stale backlog", status: "backlog" })]); });
+    expect(container.textContent).not.toContain("Stale backlog");
+    expect(mockIssuesApi.list.mock.calls.some(([, filters]) => filters?.status === "done")).toBe(false);
+    act(() => { root.unmount(); });
+  });
+
+  it("debounces a board search switch and excludes a late response from the old query", async () => {
+    localStorage.setItem("paperclip:test-issues:company-1", JSON.stringify({ viewMode: "board", statuses: ["backlog"] }));
+    let resolveOld!: (issues: Issue[]) => void;
+    const pendingOld = new Promise<Issue[]>((resolve) => { resolveOld = resolve; });
+    mockIssuesApi.list.mockImplementation((_companyId, filters) =>
+      filters?.q === "old" ? pendingOld
+        : Promise.resolve([createIssue({ id: "new-result", title: "New search target", status: "backlog" })]));
+    const { root } = renderWithQueryClient(
+      <IssuesList issues={[]} agents={[]} projects={[]} initialSearch="old" viewStateKey="paperclip:test-issues" onUpdateIssue={() => undefined} />,
+      container,
+    );
+    await waitForAssertion(() => expect(mockIssuesApi.list).toHaveBeenCalledWith(
+      "company-1", expect.objectContaining({ status: "backlog", q: "old", limit: 50, offset: 0 }),
+      { signal: expect.any(AbortSignal) },
+    ));
+    const oldBoardCalls = mockIssuesApi.list.mock.calls.filter(([, filters]) => filters?.status === "backlog" && filters?.q === "old");
+    const oldSignal = oldBoardCalls[0]?.[2]?.signal as AbortSignal;
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Search tasks"]');
+    expect(input).not.toBeNull();
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    expect(setter).toBeTypeOf("function");
+    act(() => {
+      setter!.call(input, "n");
+      input!.dispatchEvent(new Event("input", { bubbles: true }));
+      setter!.call(input, "new");
+      input!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(mockIssuesApi.list).toHaveBeenCalledTimes(1);
+    await new Promise((resolve) => setTimeout(resolve, 280));
+    await waitForAssertion(() => {
+      expect(mockIssuesApi.list).toHaveBeenCalledWith(
+        "company-1", expect.objectContaining({ status: "backlog", q: "new", limit: 50, offset: 0 }),
+        { signal: expect.any(AbortSignal) },
+      );
+      expect(oldSignal.aborted).toBe(true);
+      expect(container.textContent).toContain("New search target");
+    });
+    await act(async () => { resolveOld([createIssue({ id: "old-result", title: "Old search target", status: "backlog" })]); });
+    expect(container.textContent).not.toContain("Old search target");
+    expect(mockIssuesApi.list.mock.calls.some(([, filters]) => filters?.q === "n")).toBe(false);
+    expect(mockIssuesApi.list.mock.calls.every(([, filters]) =>
+      filters?.status === "backlog" && filters?.limit === 50 && (filters?.q === "old" || filters?.q === "new"))).toBe(true);
+    act(() => { root.unmount(); });
+  });
+
+  it("offers independent continuation when a board column fills its first page", async () => {
     localStorage.setItem(
       "paperclip:test-issues:company-1",
       JSON.stringify({ viewMode: "board" }),
     );
 
-    const cappedBacklogIssues = Array.from({ length: 200 }, (_, index) =>
+    const cappedBacklogIssues = Array.from({ length: 50 }, (_, index) =>
       createIssue({
         id: `issue-backlog-${index + 1}`,
         identifier: `PAP-${index + 1}`,
@@ -1507,7 +1677,9 @@ describe("IssuesList", () => {
     );
 
     mockIssuesApi.list.mockImplementation((_companyId, filters) => {
-      if (filters?.status === "backlog") return Promise.resolve(cappedBacklogIssues);
+      if (filters?.status === "backlog") return Promise.resolve(filters?.offset === 50
+        ? [createIssue({ id: "off-page-backlog", title: "Off-page backlog", status: "backlog" })]
+        : cappedBacklogIssues);
       return Promise.resolve([]);
     });
 
@@ -1523,7 +1695,19 @@ describe("IssuesList", () => {
     );
 
     await waitForAssertion(() => {
-      expect(container.textContent).toContain("Some board columns are showing up to 200 tasks. Refine filters or search to reveal the rest.");
+      expect(container.textContent).toContain("Load more Backlog");
+      expect(container.textContent).not.toContain("Off-page backlog");
+    });
+    const continuation = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Load more Backlog"));
+    act(() => { continuation?.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    await waitForAssertion(() => {
+      expect(mockIssuesApi.list).toHaveBeenCalledWith("company-1", expect.objectContaining({
+        status: "backlog", limit: 50, offset: 50,
+      }), { signal: expect.any(AbortSignal) });
+      expect(mockKanbanBoard).toHaveBeenLastCalledWith(expect.objectContaining({
+        issues: expect.arrayContaining([expect.objectContaining({ id: "off-page-backlog" })]),
+      }));
+      expect(container.textContent).not.toContain("Load more Backlog");
     });
 
     act(() => {

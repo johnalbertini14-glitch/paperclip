@@ -47,15 +47,13 @@ describe("issues page pagination helpers", () => {
     });
   });
 
-  it("advances to the next offset when the current page is full", () => {
-    expect(getNextIssuesPageOffset(100, 0)).toBe(100);
-    expect(getNextIssuesPageOffset(100, 100)).toBe(200);
-    expect(getNextIssuesPageOffset(1000, 2000, 1000)).toBe(3000);
+  it("advances to the next offset for a full 50-row Tasks page", () => {
+    expect(getNextIssuesPageOffset(50, 0)).toBe(50);
+    expect(getNextIssuesPageOffset(50, 50)).toBe(100);
   });
 
   it("stops requesting issue pages when the current page is partial", () => {
-    expect(getNextIssuesPageOffset(99, 0)).toBeUndefined();
-    expect(getNextIssuesPageOffset(999, 2000, 1000)).toBeUndefined();
+    expect(getNextIssuesPageOffset(49, 0)).toBeUndefined();
   });
 
   it("dedupes overlapping pages without moving the original issue position", () => {

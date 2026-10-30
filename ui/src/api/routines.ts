@@ -35,12 +35,17 @@ export interface RestoreRoutineRevisionResponse {
 }
 
 export const routinesApi = {
-  list: (companyId: string, filters?: { projectId?: string | null }) => {
+  list: (companyId: string, filters?: { projectId?: string | null; limit?: number; offset?: number; failedLatest?: boolean }, options?: { signal?: AbortSignal }) => {
     const params = new URLSearchParams();
     if (filters?.projectId) params.set("projectId", filters.projectId);
+    if (filters?.limit !== undefined) params.set("limit", String(filters.limit));
+    if (filters?.offset !== undefined) params.set("offset", String(filters.offset));
+    if (filters?.failedLatest) params.set("failedLatest", "true");
     const query = params.toString();
-    return api.get<RoutineListItem[]>(`/companies/${companyId}/routines${query ? `?${query}` : ""}`);
+    return api.get<RoutineListItem[]>(`/companies/${companyId}/routines${query ? `?${query}` : ""}`, options);
   },
+  count: (companyId: string, filters: { failedLatest: true }, options?: { signal?: AbortSignal }) =>
+    api.get<{ count: number }>(`/companies/${companyId}/routines/count?failedLatest=true`, options),
   create: (companyId: string, data: Record<string, unknown>) =>
     api.post<Routine>(`/companies/${companyId}/routines`, data),
   get: (id: string) => api.get<RoutineDetail>(`/routines/${id}`),

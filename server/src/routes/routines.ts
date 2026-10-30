@@ -146,6 +146,15 @@ export function routineRoutes(
     });
   }
 
+  router.get("/companies/:companyId/routines/count", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const projectId = typeof req.query.projectId === "string" ? req.query.projectId : undefined;
+    if (req.query.failedLatest !== undefined && req.query.failedLatest !== "true") throw badRequest("Invalid failedLatest");
+    const count = await svc.count(companyId, { projectId, failedLatest: req.query.failedLatest === "true" });
+    res.json({ count });
+  });
+
   router.get("/companies/:companyId/routines", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);

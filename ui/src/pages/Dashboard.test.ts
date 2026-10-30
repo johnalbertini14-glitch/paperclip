@@ -1,6 +1,6 @@
 import type { Agent } from "@paperclipai/shared";
 import { describe, expect, it } from "vitest";
-import { derivePausedAgentBanner } from "./Dashboard";
+import { dashboardAttentionPage, dashboardBlockedPage, dashboardNextAttentionPage, derivePausedAgentBanner } from "./Dashboard";
 
 function agent(overrides: Partial<Agent>): Agent {
   return {
@@ -36,10 +36,33 @@ describe("derivePausedAgentBanner", () => {
   });
 
   it("shows nothing while at least one agent can run and none are import-paused", () => {
-    const banner = derivePausedAgentBanner([
+    expect(derivePausedAgentBanner([
       agent({ id: "a", status: "paused", pauseReason: "manual" }),
       agent({ id: "b", status: "idle" }),
-    ]);
-    expect(banner).toBeNull();
+    ])).toBeNull();
+  });
+});
+
+describe("Board dashboard attention cursor", () => {
+  it("starts at 50 rows and sends only the server-issued continuation cursor on later pages", () => {
+    const renderedKinds = ["issue_thread_interaction", "decision", "review", "join_request", "agent_error_alert", "budget_alert", "recovery_action", "failed_run"];
+    expect(dashboardAttentionPage(null)).toEqual({ limit: 50, sourceKinds: renderedKinds });
+    expect(dashboardAttentionPage("opaque-next-page")).toEqual({ limit: 50, cursor: "opaque-next-page", sourceKinds: renderedKinds });
+    expect(dashboardAttentionPage(null, "decision")).toEqual({ limit: 50, sourceKinds: ["issue_thread_interaction", "decision", "review", "join_request", "agent_error_alert", "budget_alert"] });
+    expect(dashboardAttentionPage("next", "recovery")).toEqual({ limit: 50, cursor: "next", sourceKinds: ["recovery_action", "failed_run"] });
+  });
+  it("continues Blocked directly from its independent 50-row issue source, not the native decision cursor", () => {
+    expect(dashboardBlockedPage(0)).toMatchObject({ attention: "blocked", limit: 50, offset: 0 });
+    expect(dashboardBlockedPage(50)).toMatchObject({ attention: "blocked", limit: 50, offset: 50 });
+    expect(dashboardNextAttentionPage(10, 5, true, true, "blocked")).toBe("reveal");
+    expect(dashboardNextAttentionPage(0, 5, true, true, "blocked")).toBe("blocked");
+    expect(dashboardNextAttentionPage(0, 5, true, false, "blocked")).toBeNull();
+    expect(dashboardNextAttentionPage(0, 5, true, true, "decision")).toBe("attention");
+    expect(dashboardNextAttentionPage(0, 5, true, true, "routine")).toBeNull();
+    expect(dashboardNextAttentionPage(6, 5, true, true, "routine")).toBe("reveal");
+    expect(dashboardNextAttentionPage(0, 5, false, true, "blocked")).toBe("blocked");
+    expect(dashboardNextAttentionPage(0, 5, false, true, "decision")).toBe("blocked");
+    expect(dashboardNextAttentionPage(0, 5, false, true, "routine")).toBeNull();
+    expect(dashboardNextAttentionPage(0, 5, false, false, "blocked")).toBeNull();
   });
 });

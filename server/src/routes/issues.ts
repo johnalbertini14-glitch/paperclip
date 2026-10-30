@@ -3268,6 +3268,33 @@ function issueListRequestKey(input: {
   };
 }
 
+function invalidatePersonalIssueListReadCache(req: Request, companyId: string) {
+  const actor = issueListActorIdentity(req, companyId).key;
+  for (const cache of [issueListResponseCache, issueListInflight]) {
+    for (const key of cache.keys()) {
+      const identity = JSON.parse(key) as { companyId: string; actor: string };
+      if (identity.companyId === companyId && identity.actor === actor) cache.delete(key);
+    }
+  }
+}
+
+// Archive visibility follows the resolved target user, not the mutating actor.
+// Keys contain resolved list filters, so this also covers other sessions/agents
+// querying that user's inbox without evicting unrelated users or companies.
+function invalidateIssueListInboxArchiveCache(companyId: string, userId: string) {
+  for (const cache of [issueListResponseCache, issueListInflight]) {
+    for (const key of cache.keys()) {
+      const identity = JSON.parse(key) as {
+        companyId: string;
+        query: { inboxArchivedByUserId?: string };
+      };
+      if (identity.companyId === companyId && identity.query.inboxArchivedByUserId === userId) {
+        cache.delete(key);
+      }
+    }
+  }
+}
+
 function pruneIssueListResponseCache(now: number) {
   for (const [key, entry] of issueListResponseCache) {
     if (entry.staleUntil <= now) issueListResponseCache.delete(key);
@@ -3402,7 +3429,9 @@ async function coordinateIssueListGet(input: {
 
   try {
     const response = await promise;
-    if (input.allowTtlCache) {
+    // A read mutation can detach an older computation while it is awaiting DB I/O.
+    // Never let that pre-mutation result repopulate the invalidated cache.
+    if (input.allowTtlCache && issueListInflight.get(input.requestKey.key) === inflightEntry) {
       setIssueListResponseCacheEntry(input.requestKey.key, {
         response,
         expiresAt: Date.now() + ISSUE_LIST_SERVER_CACHE_TTL_MS,
@@ -11623,6 +11652,7 @@ export function issueRoutes(
       entityId: issue.id,
       details: { userId: req.actor.userId, lastReadAt: readState.lastReadAt },
     });
+    invalidatePersonalIssueListReadCache(req, issue.companyId);
     res.json(readState);
   });
 
@@ -11661,6 +11691,7 @@ export function issueRoutes(
       entityId: issue.id,
       details: { userId: req.actor.userId },
     });
+    invalidatePersonalIssueListReadCache(req, issue.companyId);
     res.json({ id: issue.id, removed });
   });
 
@@ -11770,6 +11801,7 @@ export function issueRoutes(
           ...(target.policyMode ? { policyMode: target.policyMode } : {}),
         },
       });
+      invalidateIssueListInboxArchiveCache(issue.companyId, target.userId);
       res.json(archiveState);
     },
   );
@@ -11809,6 +11841,7 @@ export function issueRoutes(
           ...(target.policyMode ? { policyMode: target.policyMode } : {}),
         },
       });
+      invalidateIssueListInboxArchiveCache(issue.companyId, target.userId);
       res.json(removed ?? { ok: true, userId: target.userId });
     },
   );

@@ -9,15 +9,12 @@ import { dashboardApi } from "../api/dashboard";
 import { heartbeatsApi } from "../api/heartbeats";
 import { issuesApi } from "../api/issues";
 import { queryKeys } from "../lib/queryKeys";
-import {
-  filterLocalInboxArchivedIssues,
-  useLocalInboxArchiveIssueIds,
-} from "../lib/inboxArchiveCache";
 import { usePublishSharedQueryData, useSharedPollingQuery } from "./useSharedPolling";
+import type { Approval } from "@paperclipai/shared";
 import {
+  ACTIONABLE_APPROVAL_STATUSES,
   buildInboxDismissedAtByKey,
   computeInboxBadgeData,
-  getRecentTouchedIssues,
   loadDismissedInboxAlerts,
   saveDismissedInboxAlerts,
   loadReadInboxItems,
@@ -26,9 +23,23 @@ import {
 } from "../lib/inbox";
 
 const INBOX_ISSUE_STATUSES = "backlog,todo,in_progress,in_review,blocked,done";
-const INBOX_BADGE_ISSUE_LIMIT = 500;
 const INBOX_BADGE_HEARTBEAT_RUN_LIMIT = 200;
 const INBOX_BADGE_HOT_PATH_STALE_MS = 30_000;
+const INBOX_BADGE_APPROVAL_PAGE_SIZE = 50;
+
+// The badge only counts actionable approvals, so page through those statuses
+// instead of hydrating the company's full approval history on every tab.
+async function listActionableApprovals(companyId: string, signal?: AbortSignal) {
+  const rows = new Map<string, Approval>();
+  for (const status of ACTIONABLE_APPROVAL_STATUSES) {
+    for (let offset = 0; ; offset += INBOX_BADGE_APPROVAL_PAGE_SIZE) {
+      const page = await approvalsApi.list(companyId, status, { limit: INBOX_BADGE_APPROVAL_PAGE_SIZE, offset }, { signal });
+      for (const approval of page) rows.set(approval.id, approval);
+      if (page.length < INBOX_BADGE_APPROVAL_PAGE_SIZE) break;
+    }
+  }
+  return [...rows.values()];
+}
 
 export function useDismissedInboxAlerts() {
   const [dismissed, setDismissed] = useState<Set<string>>(loadDismissedInboxAlerts);
@@ -178,7 +189,6 @@ export function useReadInboxItems() {
 }
 
 export function useInboxBadge(companyId: string | null | undefined) {
-  const locallyArchivedIssueIds = useLocalInboxArchiveIssueIds(companyId);
   const { dismissed: dismissedAlerts } = useDismissedInboxAlerts();
   const { dismissedAtByKey } = useInboxDismissals(companyId);
   const { data: session } = useQuery({
@@ -187,8 +197,8 @@ export function useInboxBadge(companyId: string | null | undefined) {
   });
 
   const { data: approvals = [] } = useQuery({
-    queryKey: queryKeys.approvals.list(companyId!),
-    queryFn: () => approvalsApi.list(companyId!),
+    queryKey: [...queryKeys.approvals.list(companyId!), "badge-actionable"],
+    queryFn: ({ signal }) => listActionableApprovals(companyId!, signal),
     enabled: !!companyId,
   });
 
@@ -222,32 +232,30 @@ export function useInboxBadge(companyId: string | null | undefined) {
   });
   usePublishSharedQueryData(sharedDashboard, dashboard, dashboardUpdatedAt);
 
-  const mineIssuesQueryKey = queryKeys.issues.listMineByMe(companyId!);
-  const sharedMineIssues = useSharedPollingQuery({
+  // Count unread personal work on the server rather than hydrating 500 issues
+  // on every tab. Keep scalar data outside issue-array caches; existing archive
+  // and live-update sidebar invalidations refresh this company-scoped child key.
+  const unreadCountQueryKey = [...queryKeys.sidebarBadges(companyId!), "unread-issues"];
+  const sharedUnreadCount = useSharedPollingQuery({
     companyId,
-    resourceKey: "inbox-badge:mine-issues",
-    queryKey: mineIssuesQueryKey,
+    resourceKey: "inbox-badge:unread-count",
+    queryKey: unreadCountQueryKey,
     enabled: !!companyId,
   });
-  const { data: mineIssuesRaw = [], dataUpdatedAt: mineIssuesUpdatedAt } = useQuery({
-    queryKey: mineIssuesQueryKey,
-    queryFn: () =>
-      issuesApi.list(companyId!, {
-        touchedByUserId: "me",
-        inboxArchivedByUserId: "me",
-        status: INBOX_ISSUE_STATUSES,
-        limit: INBOX_BADGE_ISSUE_LIMIT,
-      }),
+  const { data: unreadCount, dataUpdatedAt: unreadCountUpdatedAt } = useQuery({
+    queryKey: unreadCountQueryKey,
+    queryFn: () => issuesApi.count(companyId!, {
+      touchedByUserId: "me",
+      inboxArchivedByUserId: "me",
+      unreadForUserId: "me",
+      status: INBOX_ISSUE_STATUSES,
+    }),
     enabled: !!companyId,
     refetchOnWindowFocus: false,
     staleTime: INBOX_BADGE_HOT_PATH_STALE_MS,
   });
-  usePublishSharedQueryData(sharedMineIssues, mineIssuesRaw, mineIssuesUpdatedAt);
+  usePublishSharedQueryData(sharedUnreadCount, unreadCount, unreadCountUpdatedAt);
 
-  const mineIssues = useMemo(
-    () => getRecentTouchedIssues(filterLocalInboxArchivedIssues(companyId, mineIssuesRaw)),
-    [companyId, locallyArchivedIssueIds, mineIssuesRaw],
-  );
   const currentUserId = session?.user.id ?? session?.session.userId ?? null;
 
   const { data: heartbeatRuns = [] } = useQuery({
@@ -258,18 +266,18 @@ export function useInboxBadge(companyId: string | null | undefined) {
     staleTime: INBOX_BADGE_HOT_PATH_STALE_MS,
   });
 
-  return useMemo(
-    () =>
-      computeInboxBadgeData({
-        approvals,
-        joinRequests,
-        dashboard,
-        heartbeatRuns,
-        mineIssues,
-        dismissedAlerts,
-        dismissedAtByKey,
-        currentUserId,
-      }),
-    [approvals, joinRequests, dashboard, heartbeatRuns, mineIssues, dismissedAlerts, dismissedAtByKey, currentUserId],
-  );
+  return useMemo(() => {
+    const badges = computeInboxBadgeData({
+      approvals,
+      joinRequests,
+      dashboard,
+      heartbeatRuns,
+      mineIssues: [],
+      dismissedAlerts,
+      dismissedAtByKey,
+      currentUserId,
+    });
+    const mineIssues = unreadCount?.count ?? 0;
+    return { ...badges, mineIssues, inbox: badges.inbox + mineIssues };
+  }, [approvals, joinRequests, dashboard, heartbeatRuns, unreadCount, dismissedAlerts, dismissedAtByKey, currentUserId]);
 }

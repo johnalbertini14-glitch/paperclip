@@ -30,6 +30,7 @@ const apiMocks = vi.hoisted(() => ({
   dashboardSummary: vi.fn(),
   executionWorkspaceSummaries: vi.fn(),
   issuesList: vi.fn(),
+  issueGet: vi.fn(),
   issuesCount: vi.fn(),
   issueLabels: vi.fn(),
   archiveFromInbox: vi.fn(),
@@ -72,6 +73,7 @@ vi.mock("../api/issues", () => ({
   issuesApi: {
     list: apiMocks.issuesList,
     listCompact: apiMocks.issuesList,
+    get: apiMocks.issueGet,
     count: apiMocks.issuesCount,
     listLabels: apiMocks.issueLabels,
     markRead: vi.fn(),
@@ -353,6 +355,7 @@ function resetInboxApiMocks() {
   });
   apiMocks.executionWorkspaceSummaries.mockResolvedValue([]);
   apiMocks.issuesList.mockResolvedValue([]);
+  apiMocks.issueGet.mockResolvedValue(null);
   apiMocks.issuesCount.mockResolvedValue({ count: 0 });
   apiMocks.issueLabels.mockResolvedValue([]);
   apiMocks.archiveFromInbox.mockResolvedValue({ id: "issue-1", archivedAt: new Date() });
@@ -912,23 +915,1228 @@ describe("Inbox toolbar", () => {
     });
 
     await vi.waitFor(() => {
-      expect(apiMocks.issuesList).toHaveBeenCalledTimes(3);
+      expect(apiMocks.issuesList).toHaveBeenCalledTimes(1);
     });
 
-    expect(apiMocks.issuesList.mock.calls.map((call) => call[1]?.includeLiveDescendantSummary)).toEqual([
-      true,
-      true,
-      true,
-    ]);
-    expect(apiMocks.issuesList.mock.calls.map((call) => call[1]?.limit)).toEqual([
-      500,
-      500,
-      500,
-    ]);
+    expect(apiMocks.issuesList).toHaveBeenCalledWith("company-1", expect.objectContaining({
+      touchedByUserId: "me",
+      inboxArchivedByUserId: "me",
+      includeLiveDescendantSummary: true,
+      limit: 50,
+      offset: 0,
+    }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
 
     act(() => {
       root.unmount();
     });
+  });
+
+  it.each([true, false].flatMap((streamlined) => ["mine", "recent", "unread", "all"].map((tab) => ({ streamlined, tab }))))(
+    "fetches only active issue-tab resources ($tab, streamlined=$streamlined)",
+    async ({ streamlined, tab }) => {
+      apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+      routerMock.location.pathname = `/inbox/${tab}`;
+      localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify({ allCategoryFilter: "everything" }));
+      localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+        JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState: { allCategoryFilter: "everything" }, columns: [] }));
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+      const root = createRoot(container);
+      try {
+        await act(async () => {
+          root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>);
+        });
+        await vi.waitFor(() => expect(queryClient.isFetching()).toBe(0));
+        const calls = apiMocks.issuesList.mock.calls.map((call) => call[1]);
+        expect(calls).toHaveLength(1);
+        expect(calls.map((filters) => [filters.touchedByUserId, filters.inboxArchivedByUserId])).toEqual(
+          tab === "mine" ? [["me", "me"]] : [["me", undefined]],
+        );
+      } finally {
+        act(() => root.unmount());
+        queryClient.clear();
+      }
+    },
+  );
+
+  it.each([true, false])("renders server-filtered Unread rows without a second local unread gate (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/unread";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    const first = Array.from({ length: 50 }, (_, index) => createIssue({
+      id: `server-unread-${index}`, identifier: `PAP-${index + 1}`, title: `Server unread ${index}`, isUnreadForMe: false,
+    }));
+    const offPage = createIssue({ id: "server-unread-50", identifier: "PAP-51", title: "Off-page server unread", isUnreadForMe: false });
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { unreadForUserId?: string; offset?: number }) =>
+      Promise.resolve(filters.unreadForUserId === "me" ? filters.offset === 50 ? [offPage] : first : []));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledWith("company-1", expect.objectContaining({
+        touchedByUserId: "me", unreadForUserId: "me", limit: 50, offset: 0,
+      }), expect.anything()));
+      await vi.waitFor(() => expect(container.textContent).toContain("Server unread 0"));
+      await act(async () => Array.from(container.querySelectorAll("button"))
+        .find((button) => button.textContent === "Load more recent tasks")!.click());
+      await vi.waitFor(() => expect(container.textContent).toContain("Off-page server unread"));
+      expect(apiMocks.issuesList.mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({ unreadForUserId: "me", offset: 50 }));
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false].flatMap((streamlined) => ["mine", "recent", "unread"].map((tab) => ({ streamlined, tab }))))(
+    "pre-filters persisted routine visibility before paging on $tab (streamlined=$streamlined)",
+    async ({ streamlined, tab }) => {
+      routerMock.location.pathname = `/inbox/${tab}`;
+      apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+      const viewState = { issueFilters: { hideRoutineExecutions: true } };
+      localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+      localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+        JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+      const first = Array.from({ length: 50 }, (_, index) => createIssue({
+        id: `manual-${index}`, identifier: `PAP-${index + 1}`, title: `Manual task ${index}`, isUnreadForMe: true,
+      }));
+      const offPage = createIssue({ id: "manual-50", identifier: "PAP-51", title: "Off-page manual task", isUnreadForMe: true });
+      apiMocks.issuesList.mockImplementation((_companyId: string, filters: { excludeRoutineExecutions?: boolean; offset?: number }) =>
+        Promise.resolve(filters.excludeRoutineExecutions ? filters.offset === 50 ? [offPage] : first : []));
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+      const root = createRoot(container);
+      try {
+        await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+        await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledTimes(1));
+        expect(apiMocks.issuesList).toHaveBeenCalledWith("company-1", expect.objectContaining({
+          touchedByUserId: "me", excludeRoutineExecutions: true, limit: 50, offset: 0,
+          ...(tab === "unread" ? { unreadForUserId: "me" } : {}),
+        }), expect.anything());
+        await vi.waitFor(() => expect(container.textContent).toContain("Manual task 0"));
+        const label = tab === "mine" ? "Load more tasks" : "Load more recent tasks";
+        await act(async () => Array.from(container.querySelectorAll("button"))
+          .find((button) => button.textContent === label)!.click());
+        await vi.waitFor(() => expect(container.textContent).toContain("Off-page manual task"));
+        expect(apiMocks.issuesList.mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({
+          excludeRoutineExecutions: true, limit: 50, offset: 50,
+        }));
+        expect(container.textContent).not.toContain(label);
+        expect(queryClient.getQueryCache().findAll().filter((query) => query.queryKey.includes("inbox:mine-issues"))
+          .every((query) => query.state.data === undefined)).toBe(true);
+      } finally {
+        act(() => root.unmount());
+        queryClient.clear();
+      }
+    },
+  );
+
+  it.each([true, false])("does not show an unfiltered routine result on Mine (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/mine";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    const viewState = { issueFilters: { hideRoutineExecutions: true } };
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+    localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { excludeRoutineExecutions?: boolean }) =>
+      Promise.resolve(filters.excludeRoutineExecutions ? [] : [createIssue({ title: "Unfiltered routine result", originKind: "routine_execution" })]));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledTimes(1));
+      expect(apiMocks.issuesList.mock.calls[0][1]).toEqual(expect.objectContaining({ excludeRoutineExecutions: true, offset: 0, limit: 50 }));
+      expect(container.textContent).not.toContain("Unfiltered routine result");
+      expect(container.textContent).not.toContain("Load more tasks");
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false].flatMap((streamlined) => ["mine", "recent", "unread"].map((tab) => ({ streamlined, tab }))))(
+    "pre-filters enabled external-object selection before paging on $tab (streamlined=$streamlined)",
+    async ({ streamlined, tab }) => {
+      routerMock.location.pathname = `/inbox/${tab}`;
+      apiMocks.experimentalSettings.mockResolvedValue({ enableExternalObjects: true, enableStreamlinedUi: streamlined });
+      const viewState = { issueFilters: { externalObjectStatuses: ["none", "failed"] } };
+      localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+      localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+        JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+      const first = Array.from({ length: 50 }, (_, index) => createIssue({
+        id: `external-${index}`, identifier: `PAP-${index + 1}`, title: `External task ${index}`, isUnreadForMe: true,
+      }));
+      const offPage = createIssue({ id: "external-50", identifier: "PAP-51", title: "Off-page external match", isUnreadForMe: true });
+      apiMocks.issuesList.mockImplementation((_companyId: string, filters: { externalObjectStatuses?: string; offset?: number }) =>
+        Promise.resolve(filters.externalObjectStatuses === "failed,none" ? filters.offset === 50 ? [offPage] : first : []));
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+      const root = createRoot(container);
+      try {
+        await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+        await vi.waitFor(() => expect(apiMocks.issuesList.mock.calls.map(([, filters]) => filters)).toEqual([expect.objectContaining({ externalObjectStatuses: "failed,none" })]));
+        expect(apiMocks.issuesList).toHaveBeenCalledWith("company-1", expect.objectContaining({
+          touchedByUserId: "me", externalObjectStatuses: "failed,none", limit: 50, offset: 0,
+        }), expect.anything());
+        await vi.waitFor(() => expect(container.textContent).toContain("External task 0"));
+        const label = tab === "mine" ? "Load more tasks" : "Load more recent tasks";
+        await act(async () => Array.from(container.querySelectorAll("button"))
+          .find((button) => button.textContent === label)!.click());
+        await vi.waitFor(() => expect(container.textContent).toContain("Off-page external match"));
+        expect(apiMocks.issuesList.mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({
+          externalObjectStatuses: "failed,none", limit: 50, offset: 50,
+        }));
+        expect(container.textContent).not.toContain(label);
+      } finally {
+        act(() => root.unmount());
+        queryClient.clear();
+      }
+    },
+  );
+
+  it.each([true, false])("does not request a disabled persisted external facet (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/mine";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableExternalObjects: false, enableStreamlinedUi: streamlined });
+    const viewState = { issueFilters: { externalObjectStatuses: ["failed"] } };
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+    localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+    apiMocks.issuesList.mockResolvedValue([createIssue({ title: "Unfiltered issue" })]);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledTimes(1));
+      expect(apiMocks.issuesList.mock.calls[0][1].externalObjectStatuses).toBeUndefined();
+      await vi.waitFor(() => expect(container.textContent).toContain("Unfiltered issue"));
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false])("does not show an unfiltered external-object match on Mine (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/mine";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableExternalObjects: true, enableStreamlinedUi: streamlined });
+    const viewState = { issueFilters: { externalObjectStatuses: ["failed"] } };
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+    localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { externalObjectStatuses?: string }) =>
+      Promise.resolve(filters.externalObjectStatuses === "failed" ? [] : [createIssue({ title: "Unfiltered external false match" })]));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledTimes(1));
+      expect(apiMocks.issuesList.mock.calls[0][1]).toEqual(expect.objectContaining({ externalObjectStatuses: "failed", limit: 50, offset: 0 }));
+      expect(container.textContent).not.toContain("Unfiltered external false match");
+      expect(container.textContent).not.toContain("Load more tasks");
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false].flatMap((streamlined) => ["mine", "recent", "unread"].map((tab) => ({ streamlined, tab }))))(
+    "pre-filters live-only before paging on $tab (streamlined=$streamlined)",
+    async ({ streamlined, tab }) => {
+      routerMock.location.pathname = `/inbox/${tab}`;
+      apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+      const viewState = { issueFilters: { liveOnly: true } };
+      localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+      localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+        JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+      const first = Array.from({ length: 50 }, (_, index) => createIssue({
+        id: `live-${index}`, identifier: `PAP-${index + 1}`, title: `Live task ${index}`, isUnreadForMe: true,
+      }));
+      const offPage = createIssue({ id: "live-50", identifier: "PAP-51", title: "Off-page live match", isUnreadForMe: true });
+      apiMocks.issuesList.mockImplementation((_companyId: string, filters: { liveOnly?: boolean; offset?: number }) =>
+        Promise.resolve(filters.liveOnly ? filters.offset === 50 ? [offPage] : first : []));
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+      const root = createRoot(container);
+      try {
+        await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+        await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledTimes(1));
+        expect(apiMocks.issuesList).toHaveBeenCalledWith("company-1", expect.objectContaining({
+          touchedByUserId: "me", liveOnly: true, limit: 50, offset: 0,
+        }), expect.anything());
+        await vi.waitFor(() => expect(container.textContent).toContain("Live task 0"));
+        const label = tab === "mine" ? "Load more tasks" : "Load more recent tasks";
+        await act(async () => Array.from(container.querySelectorAll("button"))
+          .find((button) => button.textContent === label)!.click());
+        await vi.waitFor(() => expect(container.textContent).toContain("Off-page live match"));
+        expect(apiMocks.issuesList.mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({ liveOnly: true, limit: 50, offset: 50 }));
+        expect(container.textContent).not.toContain(label);
+      } finally {
+        act(() => root.unmount());
+        queryClient.clear();
+      }
+    },
+  );
+
+  it.each([true, false])("does not show an unfiltered live-only false match on Mine (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/mine";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    const viewState = { issueFilters: { liveOnly: true } };
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+    localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { liveOnly?: boolean }) =>
+      Promise.resolve(filters.liveOnly ? [] : [createIssue({ title: "Unfiltered live false match" })]));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledTimes(1));
+      expect(apiMocks.issuesList.mock.calls[0][1]).toEqual(expect.objectContaining({ liveOnly: true, limit: 50, offset: 0 }));
+      expect(container.textContent).not.toContain("Unfiltered live false match");
+      expect(container.textContent).not.toContain("Load more tasks");
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false].flatMap((streamlined) => ["mine", "recent", "unread"].map((tab) => ({ streamlined, tab }))))(
+    "pre-filters persisted workspace selection before paging on $tab (streamlined=$streamlined)",
+    async ({ streamlined, tab }) => {
+      routerMock.location.pathname = `/inbox/${tab}`;
+      apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: true, enableStreamlinedUi: streamlined });
+      const viewState = { issueFilters: { workspaces: ["workspace-b", "workspace-a"] } };
+      localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+      localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+        JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+      const first = Array.from({ length: 50 }, (_, index) => createIssue({
+        id: `workspace-${index}`, identifier: `PAP-${index + 1}`, title: `Workspace task ${index}`, isUnreadForMe: true,
+      }));
+      const offPage = createIssue({ id: "workspace-50", identifier: "PAP-51", title: "Off-page workspace match", isUnreadForMe: true });
+      apiMocks.issuesList.mockImplementation((_companyId: string, filters: { workspaceIds?: string; offset?: number }) =>
+        Promise.resolve(filters.workspaceIds === "workspace-a,workspace-b" ? filters.offset === 50 ? [offPage] : first : []));
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+      const root = createRoot(container);
+      try {
+        await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+        await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledTimes(1));
+        expect(apiMocks.issuesList).toHaveBeenCalledWith("company-1", expect.objectContaining({
+          touchedByUserId: "me", workspaceIds: "workspace-a,workspace-b", limit: 50, offset: 0,
+        }), expect.anything());
+        await vi.waitFor(() => expect(container.textContent).toContain("Workspace task 0"));
+        const label = tab === "mine" ? "Load more tasks" : "Load more recent tasks";
+        await act(async () => Array.from(container.querySelectorAll("button"))
+          .find((button) => button.textContent === label)!.click());
+        await vi.waitFor(() => expect(container.textContent).toContain("Off-page workspace match"));
+        expect(apiMocks.issuesList.mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({
+          workspaceIds: "workspace-a,workspace-b", limit: 50, offset: 50,
+        }));
+        expect(container.textContent).not.toContain(label);
+      } finally {
+        act(() => root.unmount());
+        queryClient.clear();
+      }
+    },
+  );
+
+  it.each([true, false])("does not show an unfiltered workspace match on Mine (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/mine";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: true, enableStreamlinedUi: streamlined });
+    const viewState = { issueFilters: { workspaces: ["workspace-a"] } };
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+    localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { workspaceIds?: string }) =>
+      Promise.resolve(filters.workspaceIds === "workspace-a" ? [] : [createIssue({ title: "Unfiltered workspace false match" })]));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledTimes(1));
+      expect(apiMocks.issuesList.mock.calls[0][1]).toEqual(expect.objectContaining({ workspaceIds: "workspace-a", limit: 50, offset: 0 }));
+      expect(container.textContent).not.toContain("Unfiltered workspace false match");
+      expect(container.textContent).not.toContain("Load more tasks");
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false].flatMap((streamlined) => ["mine", "recent", "unread"].map((tab) => ({ streamlined, tab }))))(
+    "pre-filters persisted creator selection before paging on $tab (streamlined=$streamlined)",
+    async ({ streamlined, tab }) => {
+      routerMock.location.pathname = `/inbox/${tab}`;
+      apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+      const agentId = "11111111-1111-4111-8111-111111111111";
+      const viewState = { issueFilters: { creators: ["user:local-board", `agent:${agentId}`] } };
+      localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+      localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+        JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+      const createdByAny = `agent:${agentId},user:me`;
+      const first = Array.from({ length: 50 }, (_, index) => createIssue({
+        id: `creator-${index}`, identifier: `PAP-${index + 1}`, title: `Creator task ${index}`, isUnreadForMe: true,
+      }));
+      const offPage = createIssue({ id: "creator-50", identifier: "PAP-51", title: "Off-page creator match", isUnreadForMe: true });
+      apiMocks.issuesList.mockImplementation((_companyId: string, filters: { createdByAny?: string; offset?: number }) =>
+        Promise.resolve(filters.createdByAny === createdByAny ? filters.offset === 50 ? [offPage] : first : []));
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+      const root = createRoot(container);
+      try {
+        await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+        await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledTimes(1));
+        expect(apiMocks.issuesList).toHaveBeenCalledWith("company-1", expect.objectContaining({
+          touchedByUserId: "me", createdByAny, limit: 50, offset: 0,
+        }), expect.anything());
+        await vi.waitFor(() => expect(container.textContent).toContain("Creator task 0"));
+        // A creator-only selection must not cache its filtered rows as the shared unfiltered page.
+        const populatedPage = queryClient.getQueryCache().getAll().find((query) => query.state.data === first);
+        expect(populatedPage?.queryKey).toContain("creators");
+        expect(populatedPage?.queryKey).toContain(createdByAny);
+        const label = tab === "mine" ? "Load more tasks" : "Load more recent tasks";
+        await act(async () => Array.from(container.querySelectorAll("button"))
+          .find((button) => button.textContent === label)!.click());
+        await vi.waitFor(() => expect(container.textContent).toContain("Off-page creator match"));
+        expect(apiMocks.issuesList.mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({
+          createdByAny, limit: 50, offset: 50,
+        }));
+        expect(container.textContent).not.toContain(label);
+      } finally {
+        act(() => root.unmount());
+        queryClient.clear();
+      }
+    },
+  );
+
+  it.each([true, false])("does not show an unfiltered creator match on Mine (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/mine";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    const viewState = { issueFilters: { creators: ["user:local-board"] } };
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+    localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { createdByAny?: string }) =>
+      Promise.resolve(filters.createdByAny === "user:me" ? [] : [createIssue({ title: "Unfiltered creator false match" })]));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledTimes(1));
+      expect(apiMocks.issuesList.mock.calls[0][1]).toEqual(expect.objectContaining({ createdByAny: "user:me", limit: 50, offset: 0 }));
+      expect(container.textContent).not.toContain("Unfiltered creator false match");
+      expect(container.textContent).not.toContain("Load more tasks");
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false].flatMap((streamlined) => ["mine", "recent", "unread"].map((tab) => ({ streamlined, tab }))))(
+    "pre-filters persisted responsible selection before paging on $tab (streamlined=$streamlined)",
+    async ({ streamlined, tab }) => {
+      routerMock.location.pathname = `/inbox/${tab}`;
+      apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+      const agentId = "11111111-1111-4111-8111-111111111111";
+      const viewState = { issueFilters: { assignees: ["__me", agentId, "__unassigned"] } };
+      localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+      localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+        JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+      const assigneeAny = `agent:${agentId},unassigned,user:me`;
+      const first = Array.from({ length: 50 }, (_, index) => createIssue({
+        id: `owner-${index}`, identifier: `PAP-${index + 1}`, title: `Owner task ${index}`, isUnreadForMe: true,
+      }));
+      const offPage = createIssue({ id: "owner-50", identifier: "PAP-51", title: "Off-page owner match", isUnreadForMe: true });
+      apiMocks.issuesList.mockImplementation((_companyId: string, filters: { assigneeAny?: string; offset?: number }) =>
+        Promise.resolve(filters.assigneeAny === assigneeAny ? filters.offset === 50 ? [offPage] : first : []));
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+      const root = createRoot(container);
+      try {
+        await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+        await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledTimes(1));
+        expect(apiMocks.issuesList).toHaveBeenCalledWith("company-1", expect.objectContaining({
+          touchedByUserId: "me", assigneeAny, limit: 50, offset: 0,
+        }), expect.anything());
+        await vi.waitFor(() => expect(container.textContent).toContain("Owner task 0"));
+        const label = tab === "mine" ? "Load more tasks" : "Load more recent tasks";
+        await act(async () => Array.from(container.querySelectorAll("button"))
+          .find((button) => button.textContent === label)!.click());
+        await vi.waitFor(() => expect(container.textContent).toContain("Off-page owner match"));
+        expect(apiMocks.issuesList.mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({
+          assigneeAny, limit: 50, offset: 50,
+        }));
+        expect(container.textContent).not.toContain(label);
+      } finally {
+        act(() => root.unmount());
+        queryClient.clear();
+      }
+    },
+  );
+
+  it.each([true, false])("does not display an unfiltered responsible false match on Mine (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/mine";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    const viewState = { issueFilters: { assignees: ["__unassigned"] } };
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+    localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { assigneeAny?: string }) =>
+      Promise.resolve(filters.assigneeAny === "unassigned" ? [] : [createIssue({ title: "Unfiltered owner false match" })]));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledTimes(1));
+      expect(apiMocks.issuesList.mock.calls[0][1]).toEqual(expect.objectContaining({ assigneeAny: "unassigned", limit: 50, offset: 0 }));
+      expect(container.textContent).not.toContain("Unfiltered owner false match");
+      expect(container.textContent).not.toContain("Load more tasks");
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false].flatMap((streamlined) => ["mine", "recent", "unread"].map((tab) => ({ streamlined, tab }))))(
+    "pre-filters persisted label and project before paging on $tab (streamlined=$streamlined)",
+    async ({ streamlined, tab }) => {
+      routerMock.location.pathname = `/inbox/${tab}`;
+      apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+      const viewState = { issueFilters: { labels: ["label-b", "label-a"], projects: ["project-b", "project-a"] } };
+      localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+      localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+        JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+      const first = Array.from({ length: 50 }, (_, index) => createIssue({
+        id: `facet-${index}`, identifier: `PAP-${index + 1}`, projectId: "project-a", labelIds: ["label-b"], title: `Facet task ${index}`, isUnreadForMe: true,
+      }));
+      const offPage = createIssue({ id: "facet-50", identifier: "PAP-51", projectId: "project-b", labelIds: ["label-a"], title: "Off-page facet match", isUnreadForMe: true });
+      apiMocks.issuesList.mockImplementation((_companyId: string, filters: { labelIds?: string; projectIds?: string; offset?: number }) =>
+        Promise.resolve(filters.labelIds === "label-a,label-b" && filters.projectIds === "project-a,project-b"
+          ? filters.offset === 50 ? [offPage] : first : []));
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+      const root = createRoot(container);
+      try {
+        await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+        await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledTimes(1));
+        expect(apiMocks.issuesList).toHaveBeenCalledWith("company-1", expect.objectContaining({
+          touchedByUserId: "me", labelIds: "label-a,label-b", projectIds: "project-a,project-b", limit: 50, offset: 0,
+        }), expect.anything());
+        await vi.waitFor(() => expect(container.textContent).toContain("Facet task 0"));
+        const label = tab === "mine" ? "Load more tasks" : "Load more recent tasks";
+        await act(async () => Array.from(container.querySelectorAll("button"))
+          .find((button) => button.textContent === label)!.click());
+        await vi.waitFor(() => expect(container.textContent).toContain("Off-page facet match"));
+        expect(apiMocks.issuesList.mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({
+          labelIds: "label-a,label-b", projectIds: "project-a,project-b", limit: 50, offset: 50,
+        }));
+        expect(container.textContent).not.toContain(label);
+      } finally {
+        act(() => root.unmount());
+        queryClient.clear();
+      }
+    },
+  );
+
+  it.each([true, false])("keeps server-prefiltered Mine rows when compact fields omit label/project (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/mine";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    const viewState = { issueFilters: { labels: ["label-a"], projects: ["project-a"] } };
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+    localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { labelIds?: string; projectIds?: string }) =>
+      Promise.resolve(filters.labelIds === "label-a" && filters.projectIds === "project-a"
+        ? [createIssue({ title: "Server scoped sparse row", labelIds: [], projectId: null })] : []));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledTimes(1));
+      expect(apiMocks.issuesList.mock.calls[0][1]).toEqual(expect.objectContaining({ labelIds: "label-a", projectIds: "project-a", limit: 50, offset: 0 }));
+      await vi.waitFor(() => expect(container.textContent).toContain("Server scoped sparse row"));
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false])("does not display off-page label/project false matches on Mine (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/mine";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    const viewState = { issueFilters: { labels: ["label-a"], projects: ["project-a"] } };
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+    localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { labelIds?: string; projectIds?: string }) =>
+      Promise.resolve(filters.labelIds === "label-a" && filters.projectIds === "project-a" ? []
+        : [createIssue({ title: "Unfiltered false match", projectId: "project-a", labelIds: ["label-a"] })]));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledTimes(1));
+      expect(apiMocks.issuesList.mock.calls[0][1]).toEqual(expect.objectContaining({ labelIds: "label-a", projectIds: "project-a", limit: 50, offset: 0 }));
+      expect(container.textContent).not.toContain("Unfiltered false match");
+      expect(container.textContent).not.toContain("Load more tasks");
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false].flatMap((streamlined) => ["mine", "recent", "unread"].map((tab) => ({ streamlined, tab }))))(
+    "pre-filters persisted status before paging on $tab (streamlined=$streamlined)",
+    async ({ streamlined, tab }) => {
+      routerMock.location.pathname = `/inbox/${tab}`;
+      apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+      const viewState = { issueFilters: { statuses: ["todo", "blocked"] } };
+      localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+      localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+        JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+      const first = Array.from({ length: 50 }, (_, index) => createIssue({
+        id: `status-${index}`, identifier: `PAP-${index + 1}`, status: "todo", title: `Status task ${index}`, isUnreadForMe: true,
+      }));
+      const offPage = createIssue({ id: "status-50", identifier: "PAP-51", status: "blocked", title: "Off-page status match", isUnreadForMe: true });
+      apiMocks.issuesList.mockImplementation((_companyId: string, filters: { status?: string; offset?: number }) =>
+        Promise.resolve(filters.status === "todo,blocked" ? filters.offset === 50 ? [offPage] : first : []));
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+      const root = createRoot(container);
+      try {
+        await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+        await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledTimes(1));
+        expect(apiMocks.issuesList).toHaveBeenCalledWith("company-1", expect.objectContaining({
+          touchedByUserId: "me", status: "todo,blocked", limit: 50, offset: 0,
+          ...(tab === "unread" ? { unreadForUserId: "me" } : {}),
+        }), expect.anything());
+        await vi.waitFor(() => expect(container.textContent).toContain("Status task 0"));
+        const label = tab === "mine" ? "Load more tasks" : "Load more recent tasks";
+        await act(async () => Array.from(container.querySelectorAll("button"))
+          .find((button) => button.textContent === label)!.click());
+        await vi.waitFor(() => expect(container.textContent).toContain("Off-page status match"));
+        expect(apiMocks.issuesList.mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({ status: "todo,blocked", limit: 50, offset: 50 }));
+        expect(container.textContent).not.toContain(label);
+      } finally {
+        act(() => root.unmount());
+        queryClient.clear();
+      }
+    },
+  );
+
+  it.each([true, false])("does not request a page when selected status is outside Inbox scope (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/mine";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    const viewState = { issueFilters: { statuses: ["cancelled"] } };
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+    localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      expect(apiMocks.issuesList).not.toHaveBeenCalled();
+      expect(container.textContent).not.toContain("Load more tasks");
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false].flatMap((streamlined) => ["mine", "recent", "unread"].map((tab) => ({ streamlined, tab }))))(
+    "pre-filters persisted priority globally on $tab (streamlined=$streamlined)",
+    async ({ streamlined, tab }) => {
+      routerMock.location.pathname = `/inbox/${tab}`;
+      apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+      const viewState = { issueFilters: { priorities: ["critical", "high"] } };
+      localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+      localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+        JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+      const first = Array.from({ length: 50 }, (_, index) => createIssue({
+        id: `priority-${index}`, identifier: `PAP-${index + 1}`, priority: "critical", title: `Priority task ${index}`, isUnreadForMe: true,
+      }));
+      const offPage = createIssue({ id: "priority-50", identifier: "PAP-51", priority: "high", title: "Off-page priority match", isUnreadForMe: true });
+      apiMocks.issuesList.mockImplementation((_companyId: string, filters: { priorities?: string; offset?: number }) =>
+        Promise.resolve(filters.priorities === "critical,high" ? filters.offset === 50 ? [offPage] : first : []));
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+      const root = createRoot(container);
+      try {
+        await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+        await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledTimes(1));
+        expect(apiMocks.issuesList).toHaveBeenCalledWith("company-1", expect.objectContaining({
+          touchedByUserId: "me", priorities: "critical,high", limit: 50, offset: 0,
+          ...(tab === "unread" ? { unreadForUserId: "me" } : {}),
+        }), expect.anything());
+        await vi.waitFor(() => expect(container.textContent).toContain("Priority task 0"));
+        const label = tab === "mine" ? "Load more tasks" : "Load more recent tasks";
+        await vi.waitFor(() => expect(container.textContent).toContain(label));
+        expect(container.textContent).not.toContain("Off-page priority match");
+        await act(async () => Array.from(container.querySelectorAll("button"))
+          .find((button) => button.textContent === label)!.click());
+        await vi.waitFor(() => expect(container.textContent).toContain("Off-page priority match"));
+        expect(apiMocks.issuesList.mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({
+          priorities: "critical,high", limit: 50, offset: 50,
+        }));
+        expect(container.textContent).not.toContain(label);
+        expect(queryClient.getQueryCache().findAll().filter((query) =>
+          query.queryKey.includes("inbox-supplement") || query.queryKey.includes("inbox:mine-issues"))
+          .every((query) => query.state.data === undefined)).toBe(true);
+      } finally {
+        act(() => root.unmount());
+        queryClient.clear();
+      }
+    },
+  );
+
+  it.each([true, false])("keeps off-page priority no-match truthful on Mine (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/mine";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    const viewState = { issueFilters: { priorities: ["critical"] } };
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+    localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { priorities?: string }) =>
+      Promise.resolve(filters.priorities === "critical" ? [] : [createIssue({ title: "Unfiltered false match", priority: "critical" })]));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(apiMocks.issuesList).toHaveBeenCalledTimes(1));
+      expect(apiMocks.issuesList.mock.calls[0][1]).toEqual(expect.objectContaining({ priorities: "critical", offset: 0, limit: 50 }));
+      expect(container.textContent).not.toContain("Unfiltered false match");
+      expect(container.textContent).not.toContain("Load more tasks");
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false])("pages Mine by server offset and stops at a short page (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/mine";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    const first = Array.from({ length: 50 }, (_, index) => createIssue({
+      id: `mine-${index}`, identifier: `PAP-${index + 1}`, title: `First page task ${index}`,
+    }));
+    const offPage = createIssue({ id: "mine-50", identifier: "PAP-51", title: "Off-page Mine task" });
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { offset?: number; touchedByUserId?: string }) =>
+      Promise.resolve(filters.touchedByUserId === "me" && filters.offset === 50 ? [offPage] : first));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(container.textContent).toContain("Load more tasks"));
+      expect(apiMocks.issuesList).toHaveBeenCalledWith("company-1", expect.objectContaining({
+        touchedByUserId: "me", inboxArchivedByUserId: "me", limit: 50, offset: 0,
+      }), expect.anything());
+      expect(container.textContent).not.toContain("Off-page Mine task");
+      await act(async () => Array.from(container.querySelectorAll("button"))
+        .find((button) => button.textContent === "Load more tasks")!.click());
+      await vi.waitFor(() => expect(apiMocks.issuesList.mock.calls.some((call) =>
+        call[1].touchedByUserId === "me" && call[1].limit === 50 && call[1].offset === 50)).toBe(true));
+      await vi.waitFor(() => expect(container.textContent).toContain("Off-page Mine task"));
+      expect(container.textContent).not.toContain("Load more tasks");
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false])("searches only scoped Mine pages and continues beyond 50 (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/mine";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    const first = Array.from({ length: 50 }, (_, index) => createIssue({
+      id: `scoped-${index}`, identifier: `PAP-${index + 1}`, title: `Target task ${index}`,
+    }));
+    const offPage = createIssue({ id: "scoped-50", identifier: "PAP-51", title: "Comment-only Mine match beyond first page" });
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { q?: string; offset?: number }) => {
+      if (filters.q === "Target") return Promise.resolve(filters.offset === 50 ? [offPage] : first);
+      return Promise.resolve([]);
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(container.querySelector('[data-slot="collection-toolbar"]') === null).toBe(!streamlined));
+      const input = container.querySelector<HTMLInputElement>('input[placeholder="Search inbox…"]')!;
+      await act(async () => {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+        setter.call(input, "Tar");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        setter.call(input, "Target");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(apiMocks.issuesList.mock.calls.some((call) => call[1].q === "Tar")).toBe(false);
+      expect(input.value).toBe("Target");
+      await vi.waitFor(() => expect(apiMocks.issuesList.mock.calls.some((call) => call[1].q === "Target")).toBe(true));
+      await vi.waitFor(() => expect(queryClient.getQueryCache().findAll().some((query) => query.queryKey.includes("Target") && Array.isArray(query.state.data) && query.state.data.length === 50)).toBe(true));
+      expect(input.value).toBe("Target");
+      await vi.waitFor(() => expect(container.textContent).toContain("Target task 0"));
+      await vi.waitFor(() => expect(container.textContent).toContain("Load more tasks"));
+      const searched = apiMocks.issuesList.mock.calls.filter((call) => call[1].q === "Target");
+      expect(searched).toHaveLength(1);
+      expect(searched[0][1]).toEqual(expect.objectContaining({
+        touchedByUserId: "me", inboxArchivedByUserId: "me", limit: 50, offset: 0,
+      }));
+      expect(container.textContent).not.toContain("Comment-only Mine match beyond first page");
+      await act(async () => Array.from(container.querySelectorAll("button"))
+        .find((button) => button.textContent === "Load more tasks")!.click());
+      await vi.waitFor(() => expect(container.textContent).toContain("Comment-only Mine match beyond first page"));
+      expect(apiMocks.issuesList.mock.calls.filter((call) => call[1].q === "Target")).toHaveLength(2);
+      expect(apiMocks.issuesList.mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({
+        touchedByUserId: "me", inboxArchivedByUserId: "me", limit: 50, offset: 50,
+      }));
+      expect(container.textContent).not.toContain("Load more tasks");
+      expect(queryClient.getQueryCache().findAll().filter((query) => query.queryKey.includes("inbox-supplement"))
+        .every((query) => query.state.fetchStatus === "idle" && query.state.data === undefined)).toBe(true);
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false])("aborts stale scoped Mine search when the query changes (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/mine";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    const pending = createDeferred<Issue[]>();
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { q?: string }) => {
+      if (filters.q === "old") return pending.promise;
+      if (filters.q === "new") return Promise.resolve([createIssue({ id: "fresh-search", title: "new result" })]);
+      return Promise.resolve([]);
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(container.querySelector('[data-slot="collection-toolbar"]') === null).toBe(!streamlined));
+      const input = container.querySelector<HTMLInputElement>('input[placeholder="Search inbox…"]')!;
+      const search = async (text: string) => act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, text);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await search("old");
+      await vi.waitFor(() => expect(apiMocks.issuesList.mock.calls.some((call) => call[1].q === "old")).toBe(true));
+      const oldCall = apiMocks.issuesList.mock.calls.find((call) => call[1].q === "old")!;
+      expect(oldCall[2]?.signal).toBeInstanceOf(AbortSignal);
+      await search("new");
+      await vi.waitFor(() => expect(container.textContent).toContain("new result"));
+      expect(oldCall[2].signal.aborted).toBe(true);
+      await act(async () => pending.resolve([createIssue({ id: "stale-search", title: "old result" })]));
+      expect(container.textContent).not.toContain("old result");
+    } finally {
+      await act(async () => pending.resolve([]));
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each(["recent", "unread"].flatMap((tab) => [true, false].map((streamlined) => ({ tab, streamlined }))))(
+    "searches scoped $tab pages beyond 50 without a global supplement (streamlined=$streamlined)",
+    async ({ tab, streamlined }) => {
+      routerMock.location.pathname = `/inbox/${tab}`;
+      apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+      const first = Array.from({ length: 50 }, (_, index) => createIssue({
+        id: `searched-${index}`, identifier: `PAP-${index + 1}`,
+        title: `Target touched task ${index}`, isUnreadForMe: true,
+      }));
+      const offPage = createIssue({ id: "searched-50", identifier: "PAP-51", title: "Comment-only touched match", isUnreadForMe: true });
+      apiMocks.issuesList.mockImplementation((_companyId: string, filters: { q?: string; offset?: number }) =>
+        Promise.resolve(filters.q === "Target" ? filters.offset === 50 ? [offPage] : first : []));
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+      const root = createRoot(container);
+      try {
+        await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+        await vi.waitFor(() => expect(container.querySelector('[data-slot="collection-toolbar"]') === null).toBe(!streamlined));
+        const input = container.querySelector<HTMLInputElement>('input[placeholder="Search inbox…"]')!;
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Target");
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        await vi.waitFor(() => expect(container.textContent).toContain("Load more recent tasks"));
+        expect(apiMocks.issuesList.mock.calls.filter((call) => call[1].q === "Target")).toHaveLength(1);
+        expect(apiMocks.issuesList).toHaveBeenCalledWith("company-1", expect.objectContaining({
+          touchedByUserId: "me", q: "Target", unreadForUserId: tab === "unread" ? "me" : undefined,
+          limit: 50, offset: 0,
+        }), expect.anything());
+        expect(container.textContent).not.toContain("Comment-only touched match");
+        await act(async () => Array.from(container.querySelectorAll("button"))
+          .find((button) => button.textContent === "Load more recent tasks")!.click());
+        await vi.waitFor(() => expect(container.textContent).toContain("Comment-only touched match"));
+        expect(apiMocks.issuesList.mock.calls.filter((call) => call[1].q === "Target")).toHaveLength(2);
+        expect(apiMocks.issuesList.mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({ offset: 50, q: "Target" }));
+        expect(queryClient.getQueryCache().findAll().filter((query) => query.queryKey.includes("inbox-supplement"))
+          .every((query) => query.state.fetchStatus === "idle" && query.state.data === undefined)).toBe(true);
+      } finally {
+        act(() => root.unmount());
+        queryClient.clear();
+      }
+    },
+  );
+
+  it.each(["recent", "unread"].flatMap((tab) => [true, false].map((streamlined) => ({ tab, streamlined }))))(
+    "pages $tab touched tasks with a real continuation (streamlined=$streamlined)",
+    async ({ tab, streamlined }) => {
+      routerMock.location.pathname = `/inbox/${tab}`;
+      apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+      const first = Array.from({ length: 50 }, (_, index) => createIssue({
+        id: `touched-${index}`, identifier: `PAP-${index + 1}`,
+        title: `First touched task ${index}`, isUnreadForMe: true,
+      }));
+      const offPage = createIssue({
+        id: "touched-50", identifier: "PAP-51", title: "Off-page touched task", isUnreadForMe: true,
+      });
+      apiMocks.issuesList.mockImplementation((_companyId: string, filters: { offset?: number; touchedByUserId?: string }) =>
+        Promise.resolve(filters.touchedByUserId === "me" && filters.offset === 50 ? [offPage] : first));
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+      const root = createRoot(container);
+      try {
+        await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+        await vi.waitFor(() => expect(container.textContent).toContain("Load more recent tasks"));
+        expect(apiMocks.issuesList).toHaveBeenCalledWith("company-1", expect.objectContaining({
+          touchedByUserId: "me", limit: 50, offset: 0,
+        }), expect.anything());
+        expect(container.textContent).not.toContain("Off-page touched task");
+        await act(async () => Array.from(container.querySelectorAll("button"))
+          .find((button) => button.textContent === "Load more recent tasks")!.click());
+        await vi.waitFor(() => expect(apiMocks.issuesList.mock.calls.some((call) =>
+          call[1].touchedByUserId === "me" && call[1].limit === 50 && call[1].offset === 50)).toBe(true));
+        await vi.waitFor(() => expect(container.textContent).toContain("Off-page touched task"));
+        expect(container.textContent).not.toContain("Load more recent tasks");
+        expect(queryClient.getQueryCache().findAll().some((query) =>
+          query.queryKey.includes("offset") && query.queryKey.includes(50)
+          && Array.isArray(query.state.data) && query.state.data.some((issue: Issue) => issue.id === offPage.id),
+        )).toBe(true);
+      } finally {
+        act(() => root.unmount());
+        queryClient.clear();
+      }
+    },
+  );
+
+  it.each([true, false])("searches All/Everything touched tasks before paging without a 25-result supplement (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/all";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify({ allCategoryFilter: "everything" }));
+    const first = Array.from({ length: 50 }, (_, index) => createIssue({
+      id: `all-search-${index}`, identifier: `PAP-${index + 1}`, title: `Target task ${index}`,
+    }));
+    const offPage = createIssue({ id: "all-search-50", identifier: "PAP-51", title: "Comment-only off-page match" });
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { q?: string; offset?: number; touchedByUserId?: string }) =>
+      Promise.resolve(filters.touchedByUserId === "me" && filters.q === "Target"
+        ? filters.offset === 50 ? [offPage] : first : []));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(container.querySelector('[data-slot="collection-toolbar"]') === null).toBe(!streamlined));
+      const input = container.querySelector<HTMLInputElement>('input[placeholder="Search inbox…"]')!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Target");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await vi.waitFor(() => expect(container.textContent).toContain("Load more recent tasks"));
+      expect(apiMocks.issuesList.mock.calls.filter((call) => call[1].q === "Target")).toHaveLength(1);
+      expect(apiMocks.issuesList).toHaveBeenCalledWith("company-1", expect.objectContaining({
+        touchedByUserId: "me", q: "Target", limit: 50, offset: 0,
+      }), expect.anything());
+      expect(container.textContent).not.toContain("Comment-only off-page match");
+      await act(async () => Array.from(container.querySelectorAll("button"))
+        .find((button) => button.textContent === "Load more recent tasks")!.click());
+      await vi.waitFor(() => expect(container.textContent).toContain("Comment-only off-page match"));
+      expect(apiMocks.issuesList.mock.calls.filter((call) => call[1].q === "Target")).toHaveLength(2);
+      expect(apiMocks.issuesList.mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({ q: "Target", offset: 50 }));
+      expect(container.textContent).not.toContain("Load more recent tasks");
+      expect(queryClient.getQueryCache().findAll().filter((query) => query.queryKey.includes("inbox-supplement"))
+        .every((query) => query.state.fetchStatus === "idle" && query.state.data === undefined)).toBe(true);
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false])("reports selected Mine zero count with archive scope (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/mine";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    const viewState = { issueFilters: { priorities: ["critical"] } };
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+    localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+    apiMocks.issuesCount.mockResolvedValue({ count: 0 });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(container.textContent).toContain("0 matching tasks"));
+      expect(apiMocks.issuesCount).toHaveBeenCalledWith("company-1", expect.objectContaining({
+        touchedByUserId: "me", inboxArchivedByUserId: "me", priorities: "critical",
+      }), expect.anything());
+      expect(apiMocks.issuesCount).toHaveBeenCalledTimes(1);
+    } finally { act(() => root.unmount()); queryClient.clear(); }
+  });
+
+  it.each([true, false])("reports the selected All/Everything server count beyond the first page (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/all";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    const viewState = { allCategoryFilter: "everything", issueFilters: { priorities: ["critical"] } };
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+    localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+    apiMocks.issuesList.mockResolvedValue(Array.from({ length: 50 }, (_, i) => createIssue({ id: `count-${i}`, identifier: `PAP-${i}` })));
+    apiMocks.issuesCount.mockResolvedValue({ count: 51 });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(container.textContent).toContain("51 matching tasks"));
+      expect(apiMocks.issuesCount).toHaveBeenCalledWith("company-1", expect.objectContaining({
+        touchedByUserId: "me", priorities: "critical", status: expect.any(String), includeRoutineExecutions: true,
+      }), expect.anything());
+      expect(apiMocks.issuesCount.mock.calls).toHaveLength(1);
+    } finally { act(() => root.unmount()); queryClient.clear(); }
+  });
+
+  it.each([true, false])("pre-filters All/Everything touched priority before paging (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/all";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    const viewState = { allCategoryFilter: "everything", issueFilters: { priorities: ["critical"] } };
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+    localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+    const first = Array.from({ length: 50 }, (_, index) => createIssue({
+      id: `all-priority-${index}`, identifier: `PAP-${index + 1}`, title: `Priority task ${index}`, priority: "critical",
+    }));
+    const offPage = createIssue({ id: "all-priority-50", identifier: "PAP-51", title: "Off-page priority task", priority: "critical" });
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { priorities?: string; offset?: number; touchedByUserId?: string }) =>
+      Promise.resolve(filters.touchedByUserId === "me" && filters.priorities === "critical"
+        ? filters.offset === 50 ? [offPage] : first : []));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(container.textContent).toContain("Load more recent tasks"));
+      expect(apiMocks.issuesList.mock.calls.filter((call) => call[1].touchedByUserId === "me")).toHaveLength(1);
+      expect(apiMocks.issuesList).toHaveBeenCalledWith("company-1", expect.objectContaining({
+        touchedByUserId: "me", priorities: "critical", limit: 50, offset: 0,
+      }), expect.anything());
+      await act(async () => Array.from(container.querySelectorAll("button"))
+        .find((button) => button.textContent === "Load more recent tasks")!.click());
+      await vi.waitFor(() => expect(container.textContent).toContain("Off-page priority task"));
+      expect(apiMocks.issuesList.mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({ priorities: "critical", offset: 50 }));
+      expect(container.textContent).not.toContain("Load more recent tasks");
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false])("keeps All/Everything priority no-match server-scoped (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/all";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    const viewState = { allCategoryFilter: "everything", issueFilters: { priorities: ["critical"] } };
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+    localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { priorities?: string; touchedByUserId?: string }) =>
+      Promise.resolve(filters.touchedByUserId === "me" && filters.priorities !== "critical"
+        ? [createIssue({ title: "Unfiltered false match", priority: "critical" })] : []));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(queryClient.isFetching()).toBe(0));
+      expect(apiMocks.issuesList.mock.calls.filter((call) => call[1].touchedByUserId === "me")).toHaveLength(1);
+      expect(apiMocks.issuesList.mock.calls.find((call) => call[1].touchedByUserId === "me")?.[1])
+        .toEqual(expect.objectContaining({ priorities: "critical", limit: 50, offset: 0 }));
+      expect(container.textContent).not.toContain("Unfiltered false match");
+      expect(queryClient.getQueryCache().findAll().filter((query) => query.queryKey.includes("inbox:touched-issues"))
+        .every((query) => query.state.data === undefined)).toBe(true);
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false])("pre-filters All/Everything external status with one touched page (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/all";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined, enableExternalObjects: true });
+    const viewState = { allCategoryFilter: "everything", issueFilters: { externalObjectStatuses: ["failed"] } };
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+    localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+    const first = Array.from({ length: 50 }, (_, index) => createIssue({ id: `all-external-${index}`, title: `External ${index}` }));
+    const offPage = createIssue({ id: "all-external-50", title: "Off-page external All match" });
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { externalObjectStatuses?: string; offset?: number }) =>
+      Promise.resolve(filters.externalObjectStatuses === "failed" ? filters.offset === 50 ? [offPage] : first : []));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(container.textContent).toContain("Load more recent tasks"));
+      expect(apiMocks.issuesList.mock.calls).toHaveLength(1);
+      expect(apiMocks.issuesList.mock.calls[0][1]).toEqual(expect.objectContaining({
+        touchedByUserId: "me", externalObjectStatuses: "failed", limit: 50, offset: 0,
+      }));
+      await act(async () => Array.from(container.querySelectorAll("button"))
+        .find((button) => button.textContent === "Load more recent tasks")!.click());
+      await vi.waitFor(() => expect(container.textContent).toContain("Off-page external All match"));
+      expect(apiMocks.issuesList.mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({ externalObjectStatuses: "failed", offset: 50 }));
+      expect(container.textContent).not.toContain("Load more recent tasks");
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false])("keeps All/Everything external no-match server-scoped (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/all";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined, enableExternalObjects: true });
+    const viewState = { allCategoryFilter: "everything", issueFilters: { externalObjectStatuses: ["failed"] } };
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify(viewState));
+    localStorage.setItem(taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState, columns: [] }));
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { externalObjectStatuses?: string }) =>
+      Promise.resolve(filters.externalObjectStatuses === "failed" ? [] : [createIssue({ title: "Unfiltered All external false match" })]));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(queryClient.isFetching()).toBe(0));
+      expect(apiMocks.issuesList.mock.calls).toHaveLength(1);
+      expect(apiMocks.issuesList.mock.calls[0][1]).toEqual(expect.objectContaining({
+        touchedByUserId: "me", externalObjectStatuses: "failed", limit: 50, offset: 0,
+      }));
+      expect(container.textContent).not.toContain("Unfiltered All external false match");
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false])("uses one All/Everything issue page and targets only failed-run context (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/all";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify({ allCategoryFilter: "everything" }));
+    const target = createIssue({ id: "run-issue", identifier: "PAP-51", title: "Linked run context" });
+    apiMocks.heartbeatRunsList.mockResolvedValue([createFailedRun({ contextSnapshot: { issueId: target.id } })]);
+    apiMocks.issueGet.mockResolvedValue(target);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(apiMocks.issueGet).toHaveBeenCalledWith(target.id, expect.anything()));
+      await vi.waitFor(() => expect(container.textContent).toContain("Linked run context"));
+      expect(apiMocks.issuesList.mock.calls.filter((call) => !call[1].touchedByUserId)).toHaveLength(0);
+      expect(apiMocks.issuesList.mock.calls.filter((call) => call[1].touchedByUserId === "me")).toHaveLength(1);
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false])("does not preload issue pages for a non-issue All category (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/all";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    localStorage.setItem(
+      taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState: {
+        allCategoryFilter: "approvals",
+      }, columns: [] }),
+    );
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify({ allCategoryFilter: "approvals" }));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(queryClient.isFetching()).toBe(0));
+      expect(apiMocks.issuesList).not.toHaveBeenCalled();
+      expect(queryClient.getQueryCache().findAll().filter((query) => query.queryKey.includes("live-descendant-summary"))
+        .every((query) => query.state.fetchStatus === "idle" && query.state.data === undefined)).toBe(true);
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false])("uses only the touched issue resource for My recent tasks (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/all";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    localStorage.setItem(
+      taskCollectionPreferencesStorageKey({ companyId: "company-1", collectionKey: "inbox" }),
+      JSON.stringify({ version: 1, companyId: "company-1", collectionKey: "inbox", viewState: {
+        allCategoryFilter: "issues_i_touched",
+      }, columns: [] }),
+    );
+    localStorage.setItem("paperclip:inbox:filters:company-1", JSON.stringify({ allCategoryFilter: "issues_i_touched" }));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(queryClient.isFetching()).toBe(0));
+      expect(apiMocks.issuesList).toHaveBeenCalledTimes(1);
+      expect(apiMocks.issuesList).toHaveBeenCalledWith("company-1", expect.objectContaining({
+        touchedByUserId: "me", limit: 50, offset: 0,
+      }), expect.anything());
+      expect(queryClient.getQueryCache().findAll().filter((query) => query.queryKey.includes("live-descendant-summary"))
+        .filter((query) => query.state.data !== undefined)).toHaveLength(1);
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false])("does not request the unrelated issue-search supplement on Blocked (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/blocked";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      const input = container.querySelector<HTMLInputElement>('input[placeholder="Search inbox…"]')!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "REVA");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(input.value).toBe("REVA");
+      expect(apiMocks.issuesList.mock.calls.some((call) => call[1].q === "REVA")).toBe(false);
+      expect(queryClient.getQueryCache().findAll().filter((query) => query.queryKey.includes("inbox-supplement"))
+        .every((query) => query.state.fetchStatus === "idle" && query.state.data === undefined)).toBe(true);
+    } finally {
+      act(() => root.unmount());
+      queryClient.clear();
+    }
+  });
+
+  it.each([true, false])("does not show an earlier search supplement while a new search is pending (streamlined=%s)", async (streamlined) => {
+    routerMock.location.pathname = "/inbox/recent";
+    apiMocks.experimentalSettings.mockResolvedValue({ enableIsolatedWorkspaces: false, enableStreamlinedUi: streamlined });
+    let resolvePending!: (rows: Issue[]) => void;
+    const pending = new Promise<Issue[]>((resolve) => { resolvePending = resolve; });
+    apiMocks.issuesList.mockImplementation((_companyId: string, filters: { q?: string }) => {
+      if (filters.q === "old") return Promise.resolve([createIssue({ id: "old-search", title: "Old search supplement" })]);
+      if (filters.q === "new") return pending;
+      if (filters.q === "newer") return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } } });
+    const root = createRoot(container);
+    const setSearch = async (value: string) => {
+      const input = container.querySelector<HTMLInputElement>('input[placeholder="Search inbox…"]')!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    };
+    try {
+      await act(async () => root.render(<QueryClientProvider client={queryClient}><Inbox /></QueryClientProvider>));
+      await vi.waitFor(() => expect(container.querySelector('[data-slot="collection-toolbar"]') === null).toBe(!streamlined));
+      await vi.waitFor(() => expect(container.querySelector('input[placeholder="Search inbox…"]')).not.toBeNull());
+      await setSearch("old");
+      await vi.waitFor(() => expect(apiMocks.issuesList.mock.calls.some((call) => call[1].q === "old")).toBe(true));
+      if (streamlined) await vi.waitFor(() => expect(container.textContent).toContain("Old search supplement"));
+      await setSearch("new");
+      await vi.waitFor(() => expect(apiMocks.issuesList.mock.calls.some((call) => call[1].q === "new")).toBe(true));
+      expect(container.textContent).not.toContain("Old search supplement");
+      expect(queryClient.getQueryData(queryClient.getQueryCache().findAll().find((query) =>
+        query.queryKey.includes("inbox-supplement") && query.queryKey.includes("new"),
+      )!.queryKey)).toBeUndefined();
+      const newCall = apiMocks.issuesList.mock.calls.find((call) => call[1].q === "new");
+      expect(newCall?.[2]?.signal).toBeInstanceOf(AbortSignal);
+      await setSearch("newer");
+      await vi.waitFor(() => expect(apiMocks.issuesList.mock.calls.some((call) => call[1].q === "newer")).toBe(true));
+      expect(newCall?.[2]?.signal.aborted).toBe(true);
+      expect(container.textContent).not.toContain("Old search supplement");
+    } finally {
+      await act(async () => resolvePending([]));
+      act(() => root.unmount());
+      queryClient.clear();
+    }
   });
 
   it("paints row hover via CSS only, without moving React selection state", async () => {

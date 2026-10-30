@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -6,6 +7,7 @@ import {
   SERVICE_WORKER_BUILD_ID_PLACEHOLDER,
   deriveBuildIdFromEntryFileName,
   stampServiceWorkerBuildId,
+  writeStampedServiceWorker,
 } from "./vite-sw-build-id";
 
 const swSource = () =>
@@ -48,6 +50,25 @@ describe("deriveBuildIdFromEntryFileName", () => {
 
   it("sanitizes characters that are unsafe in a cache name", () => {
     expect(deriveBuildIdFromEntryFileName("assets/index @weird!.js")).toBe("index--weird-");
+  });
+});
+
+describe("clean service-worker build", () => {
+  it("stamps an absent dist worker and remains safe if closeBundle runs twice", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-sw-build-"));
+    try {
+      const publicDir = path.join(dir, "public");
+      const outDir = path.join(dir, "dist");
+      fs.mkdirSync(publicDir);
+      fs.writeFileSync(path.join(publicDir, "sw.js"), swSource());
+      writeStampedServiceWorker(publicDir, outDir, "sw.js", "index-abc123");
+      const first = fs.readFileSync(path.join(outDir, "sw.js"), "utf8");
+      writeStampedServiceWorker(publicDir, outDir, "sw.js", "index-abc123");
+      expect(fs.readFileSync(path.join(outDir, "sw.js"), "utf8")).toBe(first);
+      expect(first).toContain("index-abc123");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

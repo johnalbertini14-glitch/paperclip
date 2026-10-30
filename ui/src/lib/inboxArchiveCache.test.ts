@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   beginLocalInboxArchive,
   boundLocalInboxArchive,
+  cancelInboxIssueQueries,
   clearLocalInboxArchive,
   confirmLocalInboxArchive,
   filterLocalInboxArchivedIssues,
@@ -58,6 +59,36 @@ describe("inboxArchiveCache", () => {
       "issue-b",
       "issue-c",
     ]);
+  });
+
+  it("cancels the in-flight unread count before applying an archive delta", async () => {
+    const client = new QueryClient();
+    const countKey = [...queryKeys.sidebarBadges("company-1"), "unread-issues"];
+    let resolve!: (value: { count: number }) => void;
+    const request = client.fetchQuery({ queryKey: countKey, queryFn: () => new Promise<{ count: number }>((done) => { resolve = done; }) }).catch(() => undefined);
+    await cancelInboxIssueQueries(client, "company-1");
+    client.setQueryData(countKey, { count: 5 });
+    resolve({ count: 99 });
+    await request;
+    expect(client.getQueryData(countKey)).toEqual({ count: 5 });
+    client.clear();
+  });
+
+  it("does not invent an unloaded badge or decrement below zero", () => {
+    const client = new QueryClient();
+    const key = queryKeys.issues.listMineByMe("company-1");
+    const countKey = [...queryKeys.sidebarBadges("company-1"), "unread-issues"];
+    const row = { id: "a", isUnreadForMe: true } as Issue;
+    client.setQueryData(key, [row]);
+    removeIssueFromInboxCaches(client, "company-1", "a");
+    expect(client.getQueryData(countKey)).toBeUndefined();
+    client.setQueryData(key, [row]);
+    client.setQueryData(countKey, { count: 0 });
+    const snapshot = snapshotInboxIssueCaches(client, "company-1");
+    removeIssueFromInboxCaches(client, "company-1", "a");
+    restoreIssueToInboxCaches(client, snapshot, "a");
+    expect(client.getQueryData(countKey)).toEqual({ count: 0 });
+    client.clear();
   });
 
   it("filters locally archived issues until confirmed grace expires", () => {

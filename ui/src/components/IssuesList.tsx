@@ -99,7 +99,7 @@ import { deriveOriginatingActor, ISSUE_STATUSES, type Issue, type IssueStatus, t
 import { Badge } from "@/components/ui/badge";
 const ISSUE_SEARCH_DEBOUNCE_MS = 250;
 const ISSUE_SEARCH_RESULT_LIMIT = 200;
-const ISSUE_BOARD_COLUMN_RESULT_LIMIT = 200;
+const ISSUE_BOARD_COLUMN_RESULT_LIMIT = 50;
 type IssuesListNavEntry =
   | { type: "group"; key: string; collapsed: boolean }
   | { type: "issue"; issue: Issue; hasChildren: boolean; expanded: boolean; budgetOrdinal: number };
@@ -276,6 +276,21 @@ function loadIssueCollectionPreferences(
     normalizeViewState: normalizeIssueViewState,
     normalizeColumns: (value) => normalizeInboxIssueColumns(Array.isArray(value) ? value : []),
   });
+}
+
+export function loadInitialIssueViewState(
+  companyId: string | null,
+  initialAssignees?: string[],
+  initialWorkspaces?: string[],
+  initialStatuses?: string[],
+): IssueViewState {
+  const scopedKey = companyId ? `paperclip:issues-view:${companyId}` : "paperclip:issues-view";
+  return getInitialWorkspaceViewState(loadIssueCollectionPreferences({
+    companyId: companyId ?? "__unscoped__",
+    collectionKey: "paperclip:issues-view",
+    legacyViewStorageKey: scopedKey,
+    legacyColumnsStorageKey: getIssueColumnsStorageKey(scopedKey),
+  }), initialAssignees, initialWorkspaces, undefined, initialStatuses);
 }
 
 function sortIssues(issues: Issue[], state: IssueViewState): Issue[] {
@@ -482,6 +497,7 @@ interface IssuesListProps {
   initialSearch?: string;
   searchFilters?: Omit<IssueListRequestFilters, "q" | "projectId" | "limit" | "includeRoutineExecutions">;
   searchWithinLoadedIssues?: boolean;
+  searchProvidedByParent?: boolean;
   baseCreateIssueDefaults?: Record<string, unknown>;
   createIssueLabel?: string;
   defaultSortField?: IssueSortField;
@@ -499,6 +515,15 @@ interface IssuesListProps {
   issueBadgeById?: Map<string, string>;
   onLoadMoreIssues?: () => void;
   onSearchChange?: (search: string) => void;
+  onStatusFilterChange?: (statuses: string[]) => void;
+  onPriorityFilterChange?: (priorities: string[]) => void;
+  onLabelFilterChange?: (labels: string[]) => void;
+  onProjectFilterChange?: (projects: string[]) => void;
+  onWorkspaceFilterChange?: (workspaces: string[]) => void;
+  onExternalObjectFilterChange?: (statuses: string[]) => void;
+  onCreatorFilterChange?: (creators: string[]) => void;
+  onAssigneeFilterChange?: (assignees: string[], currentUserId: string | null) => void;
+  onVisibilityFilterChange?: (liveOnly: boolean, hideRoutineExecutions: boolean) => void;
   /** Opt in per surface while the canonical task row rolls out across collections. */
   rowPresentation?: IssueRowPresentation;
   /** Opt in per surface while the shared collection toolbar rolls out. */
@@ -727,6 +752,7 @@ function StreamlinedIssuesList({
   initialSearch,
   searchFilters,
   searchWithinLoadedIssues = false,
+  searchProvidedByParent = false,
   baseCreateIssueDefaults,
   createIssueLabel,
   defaultSortField,
@@ -739,6 +765,15 @@ function StreamlinedIssuesList({
   issueBadgeById,
   onLoadMoreIssues,
   onSearchChange,
+  onStatusFilterChange,
+  onPriorityFilterChange,
+  onLabelFilterChange,
+  onProjectFilterChange,
+  onWorkspaceFilterChange,
+  onCreatorFilterChange,
+  onExternalObjectFilterChange,
+  onAssigneeFilterChange,
+  onVisibilityFilterChange,
   rowPresentation = "legacy",
   toolbarContext,
   toolbarPresentation = "legacy",
@@ -819,6 +854,33 @@ function StreamlinedIssuesList({
       initialStatuses,
     ),
   );
+  useEffect(() => {
+    onStatusFilterChange?.(viewState.statuses);
+  }, [onStatusFilterChange, viewState.statuses]);
+  useEffect(() => {
+    onPriorityFilterChange?.(viewState.priorities);
+  }, [onPriorityFilterChange, viewState.priorities]);
+  useEffect(() => {
+    onLabelFilterChange?.(viewState.labels);
+  }, [onLabelFilterChange, viewState.labels]);
+  useEffect(() => {
+    onProjectFilterChange?.(viewState.projects);
+  }, [onProjectFilterChange, viewState.projects]);
+  useEffect(() => {
+    onWorkspaceFilterChange?.(viewState.workspaces);
+  }, [onWorkspaceFilterChange, viewState.workspaces]);
+  useEffect(() => {
+    onExternalObjectFilterChange?.(viewState.externalObjectStatuses);
+  }, [onExternalObjectFilterChange, viewState.externalObjectStatuses]);
+  useEffect(() => {
+    onCreatorFilterChange?.(viewState.creators);
+  }, [onCreatorFilterChange, viewState.creators]);
+  useEffect(() => {
+    onAssigneeFilterChange?.(viewState.assignees, currentUserId);
+  }, [onAssigneeFilterChange, viewState.assignees, currentUserId]);
+  useEffect(() => {
+    onVisibilityFilterChange?.(viewState.liveOnly === true, viewState.hideRoutineExecutions);
+  }, [onVisibilityFilterChange, viewState.liveOnly, viewState.hideRoutineExecutions]);
   const [assigneePickerIssueId, setAssigneePickerIssueId] = useState<string | null>(null);
   const [assigneeSearch, setAssigneeSearch] = useState("");
   const [issueSearch, setIssueSearch] = useState(initialSearch ?? "");
@@ -916,33 +978,56 @@ function StreamlinedIssuesList({
         ...searchFilters,
         ...(enableRoutineVisibilityFilter ? { includeRoutineExecutions: true } : {}),
       }, { signal }).then((rows) => rows as Issue[]),
-    enabled: !!selectedCompanyId && normalizedIssueSearch.length > 0 && !searchWithinLoadedIssues,
+    enabled: !!selectedCompanyId && viewState.viewMode === "list" && normalizedIssueSearch.length > 0 && !searchWithinLoadedIssues && !searchProvidedByParent,
     placeholderData: (previousData) => previousData,
   });
+  const boardAssigneesReady = !viewState.assignees.includes("__me") || currentUserId !== null;
+  const boardAssigneeAny = viewState.assignees.map((value) =>
+    value === "__unassigned" ? "unassigned" : value === "__me" ? "user:me" : `agent:${value}`).join(",");
+  const boardFilters = {
+    ...(viewState.priorities.length ? { priorities: viewState.priorities.join(",") } : {}),
+    ...(viewState.labels.length ? { labelIds: viewState.labels.join(",") } : {}),
+    ...(viewState.projects.length ? { projectIds: viewState.projects.join(",") } : {}),
+    ...(viewState.workspaces.length ? { workspaceIds: viewState.workspaces.join(",") } : {}),
+    ...(externalObjectsEnabled && viewState.externalObjectStatuses.length
+      ? { externalObjectStatuses: viewState.externalObjectStatuses.join(",") } : {}),
+    ...(viewState.creators.length ? { createdByAny: viewState.creators.map((value) =>
+      value === "user:local-board" ? "user:me" : value).join(",") } : {}),
+    ...(boardAssigneeAny ? { assigneeAny: boardAssigneeAny } : {}),
+    ...(viewState.liveOnly ? { liveOnly: true } : {}),
+    ...(viewState.hideRoutineExecutions ? { excludeRoutineExecutions: true } : {}),
+  };
+  const boardQueryScope = JSON.stringify([
+    selectedCompanyId, normalizedIssueSearch, projectId, searchFilters, enableRoutineVisibilityFilter,
+    boardFilters, viewState.statuses,
+  ]);
+  const [boardPageState, setBoardPageState] = useState<{ scope: string; counts: Partial<Record<IssueStatus, number>> }>({
+    scope: "", counts: {},
+  });
+  const boardPageCounts = boardPageState.scope === boardQueryScope ? boardPageState.counts : {};
+  const boardPageRequests = boardIssueStatuses.flatMap((status) =>
+    Array.from({ length: boardPageCounts[status] ?? 1 }, (_, page) => ({ status, page })),
+  );
   const boardIssueQueries = useQueries({
-    queries: boardIssueStatuses.map((status) => ({
+    queries: boardPageRequests.map(({ status, page }) => ({
       queryKey: [
         ...queryKeys.issues.list(selectedCompanyId ?? "__no-company__"),
-        "board-column",
-        status,
-        normalizedIssueSearch,
-        projectId ?? "__all-projects__",
-        searchFilters ?? {},
-        "compact",
-        ISSUE_BOARD_COLUMN_RESULT_LIMIT,
-        enableRoutineVisibilityFilter ? "with-routine-executions" : "without-routine-executions",
+        "board-column", status, boardQueryScope, page, ISSUE_BOARD_COLUMN_RESULT_LIMIT,
       ],
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         issuesApi.listCompact(selectedCompanyId!, {
           ...searchFilters,
+          ...boardFilters,
           ...(normalizedIssueSearch.length > 0 ? { q: normalizedIssueSearch } : {}),
           projectId,
           status,
           limit: ISSUE_BOARD_COLUMN_RESULT_LIMIT,
+          offset: page * ISSUE_BOARD_COLUMN_RESULT_LIMIT,
           ...(enableRoutineVisibilityFilter ? { includeRoutineExecutions: true } : {}),
         }, { signal }).then((rows) => rows as Issue[]),
-      enabled: !!selectedCompanyId && viewState.viewMode === "board" && !searchWithinLoadedIssues,
-      placeholderData: (previousData: Issue[] | undefined) => previousData,
+      enabled: !!selectedCompanyId && boardAssigneesReady
+        && viewState.viewMode === "board" && !searchWithinLoadedIssues
+        && (viewState.statuses.length === 0 || viewState.statuses.includes(status)),
     })),
   });
   const { data: executionWorkspaces = [] } = useQuery({
@@ -1151,28 +1236,30 @@ function StreamlinedIssuesList({
   const boardIssues = useMemo(() => {
     if (viewState.viewMode !== "board" || searchWithinLoadedIssues) return null;
     const merged = new Map<string, Issue>();
-    let isPending = false;
-    for (const query of boardIssueQueries) {
-      isPending ||= query.isPending;
-      for (const issue of query.data ?? []) {
-        merged.set(issue.id, issue);
-      }
+    for (const [index, query] of boardIssueQueries.entries()) {
+      const status = boardPageRequests[index]?.status;
+      if (!boardAssigneesReady || !status || (viewState.statuses.length && !viewState.statuses.includes(status))) continue;
+      for (const issue of query.data ?? []) merged.set(issue.id, issue);
     }
-    if (merged.size > 0) return [...merged.values()];
-    return isPending ? issues : [];
-  }, [boardIssueQueries, issues, searchWithinLoadedIssues, viewState.viewMode]);
-  const boardColumnLimitReached = useMemo(
-    () =>
-      viewState.viewMode === "board" &&
-      !searchWithinLoadedIssues &&
-      boardIssueQueries.some((query) => (query.data?.length ?? 0) === ISSUE_BOARD_COLUMN_RESULT_LIMIT),
-    [boardIssueQueries, searchWithinLoadedIssues, viewState.viewMode],
-  );
+    return [...merged.values()];
+  }, [boardAssigneesReady, boardIssueQueries, boardPageRequests, searchWithinLoadedIssues, viewState.statuses, viewState.viewMode]);
+  const boardContinuations = viewState.viewMode === "board" && !searchWithinLoadedIssues && boardAssigneesReady
+    ? boardIssueStatuses.flatMap((status) => {
+      if (viewState.statuses.length && !viewState.statuses.includes(status)) return [];
+      const page = (boardPageCounts[status] ?? 1) - 1;
+      const index = boardPageRequests.findIndex((request) => request.status === status && request.page === page);
+      const query = boardIssueQueries[index];
+      return query?.data?.length === ISSUE_BOARD_COLUMN_RESULT_LIMIT
+        ? [{ status, loading: boardIssueQueries.some((entry, position) =>
+          boardPageRequests[position]?.status === status && entry.isPending) }]
+        : [];
+    })
+    : [];
 
   const sourceIssues = useMemo(() => {
-    const useRemoteSearch = normalizedIssueSearch.length > 0 && !searchWithinLoadedIssues;
+    const useRemoteSearch = normalizedIssueSearch.length > 0 && !searchWithinLoadedIssues && !searchProvidedByParent;
     return boardIssues ?? (useRemoteSearch ? searchedIssues : issues);
-  }, [boardIssues, issues, normalizedIssueSearch, searchedIssues, searchWithinLoadedIssues]);
+  }, [boardIssues, issues, normalizedIssueSearch, searchedIssues, searchWithinLoadedIssues, searchProvidedByParent]);
 
   const searchScopedIssues = useMemo(
     () => normalizedIssueSearch.length > 0 && searchWithinLoadedIssues
@@ -1200,14 +1287,19 @@ function StreamlinedIssuesList({
     externalObjectSummaryByIssueId,
     externalObjectSummariesReady: externalObjectSummariesReady && !externalObjectSummariesLoading,
   }), [externalObjectSummariesLoading, externalObjectSummariesReady, externalObjectSummaryByIssueId, issueFilterWorkspaceContext]);
-  const externalObjectFilterLoading = hasExternalObjectStatusFilters
+  const externalObjectFilterLoading = !onExternalObjectFilterChange && hasExternalObjectStatusFilters
     && externalObjectSummariesLoading
     && !externalObjectSummariesReady;
 
   const filtered = useMemo(() => {
+    // The remote board queries apply every visible facet before LIMIT/OFFSET.
+    // Re-filtering a page locally can hide a full page and strand its continuation.
+    if (boardIssues !== null) return sortIssues(searchScopedIssues, viewState);
     const filteredByControls = applyIssueFilters(
       searchScopedIssues,
-      viewState,
+      onVisibilityFilterChange && viewState.viewMode === "list"
+        ? { ...viewState, liveOnly: false, hideRoutineExecutions: false, workspaces: onWorkspaceFilterChange ? [] : viewState.workspaces, externalObjectStatuses: onExternalObjectFilterChange ? [] : viewState.externalObjectStatuses }
+        : viewState,
       currentUserId,
       enableRoutineVisibilityFilter,
       liveIssueIds,
@@ -1215,11 +1307,15 @@ function StreamlinedIssuesList({
     );
     return sortIssues(filteredByControls, viewState);
   }, [
+    boardIssues,
     searchScopedIssues,
     viewState,
     currentUserId,
     enableRoutineVisibilityFilter,
+    onVisibilityFilterChange,
+    onWorkspaceFilterChange,
     liveIssueIds,
+    onExternalObjectFilterChange,
     issueFilterContext,
   ]);
 
@@ -2014,15 +2110,41 @@ function StreamlinedIssuesList({
 
       {(isLoading || externalObjectFilterLoading) && <PageSkeleton variant="issues-list" />}
       {error && <p className="text-sm text-destructive">{error.message}</p>}
-      {!searchWithinLoadedIssues && normalizedIssueSearch.length > 0 && searchedIssues.length === ISSUE_SEARCH_RESULT_LIMIT && (
+      {viewState.viewMode === "list" && !searchWithinLoadedIssues && !searchProvidedByParent && normalizedIssueSearch.length > 0 && searchedIssues.length === ISSUE_SEARCH_RESULT_LIMIT && (
         <p className="text-xs text-muted-foreground">
           Showing up to {ISSUE_SEARCH_RESULT_LIMIT} matches. Refine the search to narrow further.
         </p>
       )}
-      {boardColumnLimitReached && (
-        <p className="text-xs text-muted-foreground">
-          Some board columns are showing up to {ISSUE_BOARD_COLUMN_RESULT_LIMIT} tasks. Refine filters or search to reveal the rest.
-        </p>
+      {viewState.viewMode === "board" && boardIssueQueries.map((query, index) => query.error && (
+        <button
+          key={`${boardPageRequests[index]?.status}-${boardPageRequests[index]?.page}`}
+          type="button"
+          className="rounded-md border px-3 py-1 text-sm text-destructive"
+          onClick={() => void query.refetch()}
+        >
+          Retry {issueStatusLabels[boardPageRequests[index].status]} column
+        </button>
+      ))}
+      {boardContinuations.length > 0 && (
+        <div className="flex flex-wrap gap-2" aria-label="Board column continuation">
+          {boardContinuations.map(({ status, loading }) => (
+            <button
+              key={status}
+              type="button"
+              disabled={loading}
+              className="rounded-md border px-3 py-1 text-sm"
+              onClick={() => setBoardPageState((previous) => ({
+                scope: boardQueryScope,
+                counts: {
+                  ...(previous.scope === boardQueryScope ? previous.counts : {}),
+                  [status]: (boardPageCounts[status] ?? 1) + 1,
+                },
+              }))}
+            >
+              Load more {issueStatusLabels[status]}
+            </button>
+          ))}
+        </div>
       )}
       {!isLoading && !externalObjectFilterLoading && filtered.length === 0 && viewState.viewMode === "list" && (
         <EmptyState

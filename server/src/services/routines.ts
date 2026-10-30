@@ -2057,30 +2057,38 @@ export function routineService(
     return run;
   }
 
+  const listConditions = (companyId: string, filters?: { projectId?: string | null; failedLatest?: boolean }) => {
+    const conditions = [eq(routines.companyId, companyId)];
+    if (filters?.projectId) conditions.push(eq(routines.projectId, filters.projectId));
+    if (filters?.failedLatest) {
+      conditions.push(eq(routines.status, "active"));
+      conditions.push(sql`(
+        select latest.status from routine_runs latest
+        where latest.company_id = ${companyId} and latest.routine_id = ${routines.id}
+        order by latest.created_at desc, latest.id desc limit 1
+      ) in ('failed', 'timed_out')`);
+    }
+    return conditions;
+  };
+
   return {
     evaluateActivityGate,
     get: getRoutineById,
     getTrigger: getTriggerById,
+    count: async (companyId: string, filters?: { projectId?: string | null; failedLatest?: boolean }): Promise<number> => {
+      const [row] = await db.select({ total: sql<number>`count(*)` })
+        .from(routines).where(and(...listConditions(companyId, filters)));
+      return Number(row?.total ?? 0);
+    },
 
     list: async (
       companyId: string,
       filters?: { projectId?: string | null; limit?: number; offset?: number; failedLatest?: boolean },
     ): Promise<RoutineListItem[]> => {
-      const conditions = [eq(routines.companyId, companyId)];
-      if (filters?.projectId) conditions.push(eq(routines.projectId, filters.projectId));
-      if (filters?.failedLatest) {
-        conditions.push(eq(routines.status, "active"));
-        conditions.push(sql`(
-          select latest.status from routine_runs latest
-          where latest.company_id = ${companyId} and latest.routine_id = ${routines.id}
-          order by latest.created_at desc, latest.id desc limit 1
-        ) in ('failed', 'timed_out')`);
-      }
-
       const query = db
         .select()
         .from(routines)
-        .where(and(...conditions))
+        .where(and(...listConditions(companyId, filters)))
         .orderBy(desc(routines.updatedAt), asc(routines.title));
       const rows = filters?.limit !== undefined
         ? await query.limit(filters.limit).offset(filters.offset ?? 0)

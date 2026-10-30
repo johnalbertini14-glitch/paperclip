@@ -5,6 +5,7 @@ import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tansta
 import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
 import { projectsApi } from "../api/projects";
+import { instanceSettingsApi } from "../api/instanceSettings";
 import { heartbeatsApi } from "../api/heartbeats";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -13,7 +14,7 @@ import { usePublishSharedQueryData, useSharedPollingQuery } from "@/hooks/useSha
 import { queryKeys } from "../lib/queryKeys";
 import { createIssueDetailLocationState } from "../lib/issueDetailBreadcrumb";
 import { EmptyState } from "../components/EmptyState";
-import { IssuesList } from "../components/IssuesList";
+import { IssuesList, loadInitialIssueViewState } from "../components/IssuesList";
 import { TaskViewsMenu } from "../components/TaskViewsMenu";
 import { Button } from "@/components/ui/button";
 import { CircleDot, Plus } from "lucide-react";
@@ -34,8 +35,7 @@ import {
   type TaskViewKey,
 } from "../lib/task-views";
 
-const WORKSPACE_FILTER_ISSUE_LIMIT = 1000;
-const ISSUES_PAGE_SIZE = 100;
+const ISSUES_PAGE_SIZE = 50;
 export const ISSUES_ROW_PRESENTATION = "task" as const;
 export const ISSUES_TOOLBAR_PRESENTATION = "collection" as const;
 
@@ -173,6 +173,73 @@ function OrganizationIssues({
 
   const urlSearch = searchParams.get("q") ?? "";
   const [searchOverride, setSearchOverride] = useState<{ search: string; locationSearch: string } | null>(null);
+  const initialAssignees = searchParams.get("assignee") ? [searchParams.get("assignee")!] : undefined;
+  const initialWorkspaces = searchParams.getAll("workspace").filter((workspaceId) => workspaceId.length > 0);
+  const [scopedFilters, setScopedFilters] = useState(() => ({
+    companyId: selectedCompanyId,
+    ...loadInitialIssueViewState(selectedCompanyId, initialAssignees, initialWorkspaces.length ? initialWorkspaces : undefined, initialStatuses),
+  }));
+  // Reset before the first query for a newly selected company, not in an effect
+  // after a request with the previous company's facets has already started.
+  if (scopedFilters.companyId !== selectedCompanyId) {
+    setScopedFilters({
+      companyId: selectedCompanyId,
+      ...loadInitialIssueViewState(selectedCompanyId, initialAssignees, initialWorkspaces.length ? initialWorkspaces : undefined, initialStatuses),
+    });
+  }
+  const statusFilter = scopedFilters.statuses;
+  const priorityFilter = scopedFilters.priorities;
+  const labelFilter = scopedFilters.labels;
+  const projectFilter = scopedFilters.projects;
+  const workspaceFilter = scopedFilters.workspaces;
+  const { data: experimentalSettings, isFetched: experimentalSettingsFetched } = useQuery({
+    queryKey: queryKeys.instance.experimentalSettings,
+    queryFn: () => instanceSettingsApi.getExperimental(),
+    retry: false,
+  });
+  const externalObjectStatuses = experimentalSettings?.enableExternalObjects === true
+    ? scopedFilters.externalObjectStatuses.join(",") : "";
+  const liveOnly = scopedFilters.liveOnly === true;
+  const hideRoutineExecutions = scopedFilters.hideRoutineExecutions;
+  const creatorFilter = scopedFilters.creators;
+  const createdByAny = creatorFilter.map((value) => value === "user:local-board" ? "user:me" : value).join(",");
+  const assigneeFilter = scopedFilters.assignees;
+  const [assigneeUserId, setAssigneeUserId] = useState<string | null>(null);
+  const handleStatusFilterChange = useCallback((statuses: string[]) => {
+    setScopedFilters((previous) => previous.statuses.join(",") === statuses.join(",") ? previous : { ...previous, statuses });
+  }, []);
+  const handlePriorityFilterChange = useCallback((priorities: string[]) => {
+    setScopedFilters((previous) => previous.priorities.join(",") === priorities.join(",") ? previous : { ...previous, priorities });
+  }, []);
+  const handleLabelFilterChange = useCallback((labels: string[]) => {
+    setScopedFilters((previous) => previous.labels.join(",") === labels.join(",") ? previous : { ...previous, labels });
+  }, []);
+  const handleProjectFilterChange = useCallback((projects: string[]) => {
+    setScopedFilters((previous) => previous.projects.join(",") === projects.join(",") ? previous : { ...previous, projects });
+  }, []);
+  const handleWorkspaceFilterChange = useCallback((workspaces: string[]) => {
+    setScopedFilters((previous) => previous.workspaces.join(",") === workspaces.join(",") ? previous : { ...previous, workspaces });
+  }, []);
+  const handleExternalObjectFilterChange = useCallback((statuses: string[]) => {
+    setScopedFilters((previous) => previous.externalObjectStatuses.join(",") === statuses.join(",")
+      ? previous : { ...previous, externalObjectStatuses: statuses });
+  }, []);
+  const handleCreatorFilterChange = useCallback((creators: string[]) => {
+    setScopedFilters((previous) => previous.creators.join(",") === creators.join(",") ? previous : { ...previous, creators });
+  }, []);
+  const handleVisibilityFilterChange = useCallback((live: boolean, hideRoutine: boolean) => {
+    setScopedFilters((previous) => previous.liveOnly === live && previous.hideRoutineExecutions === hideRoutine
+      ? previous : { ...previous, liveOnly: live, hideRoutineExecutions: hideRoutine });
+  }, []);
+  const handleAssigneeFilterChange = useCallback((assignees: string[], currentUserId: string | null) => {
+    setScopedFilters((previous) => previous.assignees.join(",") === assignees.join(",") ? previous : { ...previous, assignees });
+    setAssigneeUserId(currentUserId);
+  }, []);
+  const resolvedAssignees = assigneeFilter.map((value) =>
+    value === "__unassigned" ? "unassigned" : value === "__me"
+      ? (assigneeUserId ? "user:me" : null) : `agent:${value}`);
+  const assigneesReady = !assigneeFilter.includes("__me") || assigneeUserId !== null;
+  const assigneeAny = resolvedAssignees.filter((value): value is string => value !== null).join(",");
   const syncedSearch = useMemo(() => {
     if (typeof window !== "undefined" && searchOverride?.locationSearch === window.location.search) {
       return searchOverride.search;
@@ -180,7 +247,6 @@ function OrganizationIssues({
     return urlSearch;
   }, [searchOverride, urlSearch, location.search]);
   const participantAgentId = searchParams.get("participantAgentId") ?? undefined;
-  const initialWorkspaces = searchParams.getAll("workspace").filter((workspaceId) => workspaceId.length > 0);
   const workspaceIdFilter = initialWorkspaces.length === 1 ? initialWorkspaces[0] : undefined;
   const handleSearchChange = useCallback((search: string) => {
     const nextUrl = buildIssuesSearchUrl(window.location.href, search);
@@ -236,7 +302,7 @@ function OrganizationIssues({
     setBreadcrumbs([{ label: "Tasks" }]);
   }, [setBreadcrumbs]);
 
-  const issuePageSize = workspaceIdFilter ? WORKSPACE_FILTER_ISSUE_LIMIT : ISSUES_PAGE_SIZE;
+  const issuePageSize = ISSUES_PAGE_SIZE;
 
   const {
     data: issuePages,
@@ -256,10 +322,41 @@ function OrganizationIssues({
       "with-routine-executions",
       "infinite",
       issuePageSize,
+      "search",
+      syncedSearch.trim(),
+      "statuses",
+      statusFilter.join(","),
+      "priorities",
+      priorityFilter.join(","),
+      "labels",
+      labelFilter.join(","),
+      "projects",
+      projectFilter.join(","),
+      "workspaces",
+      workspaceFilter.join(","),
+      "external-object-statuses",
+      externalObjectStatuses,
+      "creators",
+      createdByAny,
+      "assignees",
+      assigneeAny,
+      "visibility",
+      liveOnly,
+      hideRoutineExecutions,
     ],
     queryFn: ({ pageParam, signal }) => issuesApi.listCompact(selectedCompanyId!, {
+      ...(syncedSearch.trim() ? { q: syncedSearch.trim() } : {}),
+      ...(statusFilter.length ? { status: statusFilter.join(",") } : {}),
+      ...(priorityFilter.length ? { priorities: priorityFilter.join(",") } : {}),
+      ...(labelFilter.length ? { labelIds: labelFilter.join(",") } : {}),
+      ...(projectFilter.length ? { projectIds: projectFilter.join(",") } : {}),
+      ...(workspaceFilter.length ? { workspaceIds: workspaceFilter.join(",") } : {}),
+      ...(externalObjectStatuses ? { externalObjectStatuses } : {}),
+      ...(createdByAny ? { createdByAny } : {}),
+      ...(assigneeAny ? { assigneeAny } : {}),
+      ...(liveOnly ? { liveOnly: true } : {}),
+      ...(hideRoutineExecutions ? { excludeRoutineExecutions: true } : {}),
       participantAgentId,
-      workspaceId: workspaceIdFilter,
       includeRoutineExecutions: true,
       limit: issuePageSize,
       offset: pageParam,
@@ -269,14 +366,13 @@ function OrganizationIssues({
     initialPageParam: 0,
     getNextPageParam: (lastPage, _allPages, lastPageParam) =>
       getNextIssuesPageOffset(lastPage.length, lastPageParam, issuePageSize),
-    enabled: !!selectedCompanyId,
-    placeholderData: (previousData) => previousData,
+    enabled: !!selectedCompanyId && assigneesReady
+      && (scopedFilters.externalObjectStatuses.length === 0 || experimentalSettingsFetched),
   });
 
   const issues = useMemo(() => mergeIssuePagesStable(issuePages?.pages ?? []) as Issue[], [issuePages]);
   const liveIssueIds = useMemo(() => collectLiveIssueIds(liveRuns, issues), [issues, liveRuns]);
-  const hasMoreServerIssues = syncedSearch.trim().length === 0
-    && hasNextPage === true;
+  const hasMoreServerIssues = hasNextPage === true;
   const loadMoreServerIssues = useCallback(() => {
     if (!hasNextPage || isFetchingNextPage || fetchNextPageInFlightRef.current) return;
     fetchNextPageInFlightRef.current = true;
@@ -306,6 +402,7 @@ function OrganizationIssues({
 
   return (
     <IssuesList
+      key={selectedCompanyId}
       issues={issues ?? []}
       isLoading={isLoading}
       isLoadingMoreIssues={isFetchingNextPage}
@@ -317,12 +414,22 @@ function OrganizationIssues({
       rowPresentation={issuesPresentation.rowPresentation}
       toolbarPresentation={issuesPresentation.toolbarPresentation}
       issueLinkState={issueLinkState}
-      initialAssignees={searchParams.get("assignee") ? [searchParams.get("assignee")!] : undefined}
+      initialAssignees={initialAssignees}
       initialWorkspaces={initialWorkspaces.length > 0 ? initialWorkspaces : undefined}
       initialStatuses={initialStatuses}
       toolbarContext={toolbarContext}
       initialSearch={syncedSearch}
+      searchProvidedByParent
       onSearchChange={handleSearchChange}
+      onStatusFilterChange={handleStatusFilterChange}
+      onPriorityFilterChange={handlePriorityFilterChange}
+      onLabelFilterChange={handleLabelFilterChange}
+      onProjectFilterChange={handleProjectFilterChange}
+      onWorkspaceFilterChange={handleWorkspaceFilterChange}
+      onExternalObjectFilterChange={handleExternalObjectFilterChange}
+      onCreatorFilterChange={handleCreatorFilterChange}
+      onAssigneeFilterChange={handleAssigneeFilterChange}
+      onVisibilityFilterChange={handleVisibilityFilterChange}
       enableRoutineVisibilityFilter
       hasMoreIssues={hasMoreServerIssues}
       onLoadMoreIssues={loadMoreServerIssues}
