@@ -46,9 +46,9 @@ describe("derivePausedAgentBanner", () => {
 describe("Board dashboard attention cursor", () => {
   it("starts at 50 rows and sends only the server-issued continuation cursor on later pages", () => {
     const renderedKinds = ["issue_thread_interaction", "decision", "review", "join_request", "agent_error_alert", "budget_alert", "recovery_action", "failed_run"];
-    expect(dashboardAttentionPage(null)).toEqual({ limit: 50, sourceKinds: renderedKinds });
+    expect(dashboardAttentionPage(null)).toEqual({ limit: 50, dashboardCounts: true, sourceKinds: renderedKinds });
     expect(dashboardAttentionPage("opaque-next-page")).toEqual({ limit: 50, cursor: "opaque-next-page", sourceKinds: renderedKinds });
-    expect(dashboardAttentionPage(null, "decision")).toEqual({ limit: 50, sourceKinds: ["issue_thread_interaction", "decision", "review", "join_request", "agent_error_alert", "budget_alert"] });
+    expect(dashboardAttentionPage(null, "decision")).toEqual({ limit: 50, dashboardCounts: true, sourceKinds: ["issue_thread_interaction", "decision", "review", "join_request", "agent_error_alert", "budget_alert"] });
     expect(dashboardAttentionPage("next", "recovery")).toEqual({ limit: 50, cursor: "next", sourceKinds: ["recovery_action", "failed_run"] });
   });
   it("continues Blocked directly from its independent 50-row issue source, not the native decision cursor", () => {
