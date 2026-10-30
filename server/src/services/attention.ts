@@ -53,6 +53,7 @@ import { budgetService } from "./budgets.js";
 import {
   BLOCKER_ATTENTION_MAX_DEPTH,
   BLOCKER_ATTENTION_MAX_NODES,
+  dashboardAttentionIssueIds,
   issueService,
 } from "./issues.js";
 import { executionIssueCondition } from "./issue-visibility.js";
@@ -1995,6 +1996,29 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
       const countsBySourceKind = emptyCounts();
       for (const item of rankedItems) countsBySourceKind[item.sourceKind] += 1;
 
+      // The Dashboard has three separate, pre-paginated issue facets. Count
+      // their IDs here, where the *entire* native feed is already ranked, so
+      // an off-page native review of the same issue is deducted exactly once.
+      // Thread interactions remain distinct decisions, as in buildBoardAttention.
+      let dashboardCounts: AttentionFeed["dashboardCounts"];
+      if (options.dashboardCounts && !options.cursor) {
+        const issueIds = await dashboardAttentionIssueIds(db, companyId);
+        const covered = new Set([...issueIds.blocked, ...issueIds.decision, ...issueIds.recovery]);
+        const native = rankedItems.filter((item) =>
+          (item.sourceKind === "issue_thread_interaction"
+            || ! (item.subject.kind === "issue" && covered.has(item.subject.id)))
+          && !(item.sourceKind === "recovery_action" && item.relatedIssue && issueIds.recovery.has(item.relatedIssue.id)));
+        const decisionKinds = new Set<AttentionSourceKind>([
+          "issue_thread_interaction", "decision", "review", "join_request", "agent_error_alert", "budget_alert",
+        ]);
+        const recoveryKinds = new Set<AttentionSourceKind>(["recovery_action", "failed_run"]);
+        dashboardCounts = {
+          blocked: issueIds.blocked.size,
+          decision: issueIds.decision.size + native.filter((item) => decisionKinds.has(item.sourceKind)).length,
+          recovery: issueIds.recovery.size + native.filter((item) => recoveryKinds.has(item.sourceKind)).length,
+        };
+      }
+
       return {
         companyId,
         generatedAt: new Date().toISOString(),
@@ -2006,6 +2030,7 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
         deskBadgeCount: rankedItems.filter((item) => isNewToday(item, now) || isDecideNow(item, now)).length,
         nextCursor,
         countsBySourceKind,
+        ...(dashboardCounts ? { dashboardCounts } : {}),
         items,
       };
     },

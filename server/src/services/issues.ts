@@ -6740,6 +6740,29 @@ async function countBlockedInboxIssues(
   }, 0);
 }
 
+/** Server-only identities for exact mixed-source Board counts. Never send the
+ * entire issue set to the Dashboard just to deduplicate its paged native feed. */
+export async function dashboardAttentionIssueIds(dbOrTx: any, companyId: string) {
+  const { conditions } = await blockedInboxIssueConditions(dbOrTx, companyId, { attention: "blocked" });
+  const rows = (await dbOrTx.select().from(issues).where(and(...conditions))) as IssueRow[];
+  const result = {
+    blocked: new Set<string>(),
+    decision: new Set<string>(),
+    recovery: new Set<string>(),
+  };
+  if (rows.length === 0) return result;
+  const attentionByIssueId = await listIssueBlockedInboxAttentionMap(dbOrTx, companyId, rows);
+  const recoveryIds = await dashboardRecoveryIssueIds(dbOrTx, companyId, rows.map((row) => row.id));
+  for (const row of rows) {
+    const attention = attentionByIssueId.get(row.id);
+    if (!attention) continue;
+    for (const kind of ["blocked", "decision", "recovery"] as const) {
+      if (matchesDashboardIssueKind(row.id, attention, recoveryIds, kind)) result[kind].add(row.id);
+    }
+  }
+  return result;
+}
+
 export async function readIssueCommentRunLogText(run: {
   runId?: string | null;
   logStore: string | null;

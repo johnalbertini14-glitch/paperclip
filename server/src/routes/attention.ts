@@ -62,6 +62,7 @@ export function attentionRoutes(db: Db) {
       cursor,
       sort: sortValue as AttentionSortMode | undefined,
       limit,
+      dashboardCounts: req.query.dashboardCounts === "true",
     });
     res.json(feed);
   });

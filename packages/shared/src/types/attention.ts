@@ -97,6 +97,8 @@ export interface AttentionFeedQuery {
   sort?: AttentionSortMode;
   cursor?: string;
   limit?: number;
+  /** Dashboard-only pre-page count of issue + native sources (excludes approvals/routines). */
+  dashboardCounts?: boolean;
 }
 
 export interface AttentionDetailImage {
@@ -277,5 +279,6 @@ export interface AttentionFeed {
   deskBadgeCount: number;
   nextCursor: string | null;
   countsBySourceKind: Record<AttentionSourceKind, number>;
+  dashboardCounts?: { decision: number; recovery: number; blocked: number };
   items: AttentionItem[];
 }

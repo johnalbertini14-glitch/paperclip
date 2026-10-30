@@ -17,7 +17,8 @@ import {
   issueRoutes,
 } from "../routes/issues.js";
 import { issueRecoveryActionService } from "../services/issue-recovery-actions.js";
-import { issueService } from "../services/issues.js";
+import { attentionRoutes } from "../routes/attention.js";
+import { dashboardAttentionIssueIds, issueService } from "../services/issues.js";
 import { ensureHumanRoleDefaultGrants } from "../services/principal-access-compatibility.js";
 import { resolveRequiredSuccessfulRunHandoffOnValidPath } from "../services/successful-run-handoff-state.js";
 
@@ -675,6 +676,21 @@ describeEmbeddedPostgres("issue list routes assigneeAgentId filter", () => {
     expect(decisions.body.map((row: { id: string }) => row.id)).toEqual([decisionId]);
     const decisionsCount = await request(app).get(`${base}/count?attention=blocked&dashboardKind=decision`).expect(200);
     expect(decisionsCount.body.count).toBe(1);
+    // Counts alone lose the identity needed to deduplicate a native review that
+    // describes the same off-page issue. Keep this server-only set off the wire.
+    const ids = await dashboardAttentionIssueIds(db, companyId);
+    expect([...ids.recovery]).toEqual([recoveryId]);
+    expect([...ids.decision]).toEqual([decisionId]);
+    expect(ids.blocked.size).toBe(55);
+    expect(ids.blocked.has(recoveryId)).toBe(false);
+    expect(ids.blocked.has(decisionId)).toBe(false);
+    const attentionApp = createApp(companyId);
+    attentionApp.use("/api", attentionRoutes(db));
+    const native = await request(attentionApp)
+      .get(`/api/companies/${companyId}/attention?sourceKinds=issue_thread_interaction&dashboardCounts=true&limit=1`)
+      .expect(200);
+    expect(native.body.items).toHaveLength(1);
+    expect(native.body.dashboardCounts).toEqual({ blocked: 55, decision: 2, recovery: 1 });
     await request(app).get(`${base}?attention=blocked&dashboardKind=unknown`).expect(400);
     await request(app).get(`${base}/count?dashboardKind=recovery`).expect(400);
   });
