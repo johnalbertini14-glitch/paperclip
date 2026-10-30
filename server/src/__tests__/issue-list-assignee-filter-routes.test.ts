@@ -684,12 +684,19 @@ describeEmbeddedPostgres("issue list routes assigneeAgentId filter", () => {
     expect(ids.blocked.size).toBe(55);
     expect(ids.blocked.has(recoveryId)).toBe(false);
     expect(ids.blocked.has(decisionId)).toBe(false);
+    await issueRecoveryActionService(db).upsertSourceScoped({
+      companyId, sourceIssueId: recoveryId, kind: "missing_disposition", ownerType: "board",
+      cause: "successful_run_missing_issue_disposition", fingerprint: "off-page-native-overlap",
+      evidence: { sourceRunId: "run-off-page" }, nextAction: "Choose a disposition.", wakePolicy: { type: "wake_owner" },
+    });
     const attentionApp = createApp(companyId);
     attentionApp.use("/api", attentionRoutes(db));
     const native = await request(attentionApp)
-      .get(`/api/companies/${companyId}/attention?sourceKinds=issue_thread_interaction&dashboardCounts=true&limit=1`)
+      .get(`/api/companies/${companyId}/attention?sourceKinds=issue_thread_interaction,recovery_action&dashboardCounts=true&limit=1`)
       .expect(200);
     expect(native.body.items).toHaveLength(1);
+    expect(native.body.nextCursor).toBeTruthy();
+    expect(native.body.countsBySourceKind.recovery_action).toBe(1);
     expect(native.body.dashboardCounts).toEqual({ blocked: 55, decision: 2, recovery: 1 });
     await request(app).get(`${base}?attention=blocked&dashboardKind=unknown`).expect(400);
     await request(app).get(`${base}/count?dashboardKind=recovery`).expect(400);
