@@ -28,6 +28,7 @@ jobs:
         run: >-
           pnpm exec vitest run
           server/src/__tests__/attention-service.test.ts
+          server/src/__tests__/attention-run-projection.test.ts
           server/src/__tests__/dashboard-service.test.ts
           server/src/services/attention-null-key-scope.test.ts
           server/src/__tests__/issue-list-assignee-filter-routes.test.ts

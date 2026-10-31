@@ -49,6 +49,7 @@ import type {
 } from "@paperclipai/shared";
 import { badRequest } from "../errors.js";
 import { listAttentionExhaustedRuns } from "./attention-exhausted-runs.js";
+import { memoAttentionRunProjection } from "./attention-run-projection.js";
 import { budgetService } from "./budgets.js";
 import {
   BLOCKER_ATTENTION_MAX_DEPTH,
@@ -1702,7 +1703,10 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
       const resolvedRunKey = sql<string | null>`case when ${failedRunIssueId} is not null then nullif(${failedRunIssueId}, '') else nullif(${failedRunTaskId}, '') end`;
       const newerRunsQuery =
         oldestFailedRunCreatedAt && failedAgentIds.length > 0
-          ? db
+          ? memoAttentionRunProjection(db, companyId, JSON.stringify([
+            [...failedAgentIds].sort(), [...failedIssueIdValues].sort(),
+            hasUnresolvedFailedKey, oldestFailedRunCreatedAt.toISOString(),
+          ]), () => db
             .select({
               agentId: heartbeatRuns.agentId,
               runKey: resolvedRunKey,
@@ -1715,7 +1719,7 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
               gt(heartbeatRuns.createdAt, oldestFailedRunCreatedAt),
               failedRunKeyScope,
             ))
-            .groupBy(heartbeatRuns.agentId, resolvedRunKey)
+            .groupBy(heartbeatRuns.agentId, resolvedRunKey))
           : null;
       const [failedIssueMap, failedImageMap, newerRuns] = await Promise.all([
         issueSummaryMap(
